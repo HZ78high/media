@@ -174,6 +174,38 @@ import java.util.List;
             }
           }
         });
+    ValueAnimator fadeOutAnimatorProgress = ValueAnimator.ofFloat(1.0f, 0.0f);
+    fadeOutAnimatorProgress.setInterpolator(new LinearInterpolator());
+    fadeOutAnimatorProgress.addUpdateListener(
+        animation -> {
+          float animatedValue = (float) animation.getAnimatedValue();
+          if (timeBar != null){
+            timeBar.setAlpha(animatedValue);
+          }
+        }
+    );
+    fadeOutAnimatorProgress.addListener(
+        new AnimatorListenerAdapter() {
+          @Override
+          public void onAnimationCancel(Animator animation) {
+            super.onAnimationCancel(animation);
+          }
+
+          @Override
+          public void onAnimationStart(Animator animation) {
+            if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
+              ((DefaultTimeBar) timeBar).hideScrubber(DURATION_FOR_SHOWING_ANIMATION_MS);
+            }
+          }
+
+          @Override
+          public void onAnimationEnd(Animator animation) {
+            if (timeBar !=null){
+              timeBar.setVisibility(View.INVISIBLE);
+            }
+          }
+        }
+    );
 
     ValueAnimator fadeInAnimator = ValueAnimator.ofFloat(0.0f, 1.0f);
     fadeInAnimator.setInterpolator(new LinearInterpolator());
@@ -220,6 +252,34 @@ import java.util.List;
             }
           }
         });
+    ValueAnimator fadeInAnimatorProgress = ValueAnimator.ofFloat(0.0f, 1.0f);
+    fadeInAnimatorProgress.setInterpolator(new LinearInterpolator());
+    fadeInAnimatorProgress.addUpdateListener(
+        animation -> {
+          float animatedValue = (float) animation.getAnimatedValue();
+          if (timeBar != null){
+            timeBar.setAlpha(animatedValue);
+          }
+        }
+    );
+    fadeInAnimatorProgress.addListener(
+        new AnimatorListenerAdapter() {
+          @Override
+          public void onAnimationCancel(Animator animation) {
+            super.onAnimationCancel(animation);
+          }
+
+          @Override
+          public void onAnimationStart(Animator animation) {
+            if (timeBar != null) {
+              timeBar.setVisibility(View.VISIBLE);
+            }
+            if (timeBar instanceof DefaultTimeBar && !isMinimalMode ) {
+              ((DefaultTimeBar) timeBar).showScrubber(DURATION_FOR_SHOWING_ANIMATION_MS);
+            }
+          }
+        }
+    );
 
     Resources resources = playerControlView.getResources();
     float translationYForProgressBar =
@@ -238,7 +298,7 @@ import java.util.List;
 
           @Override
           public void onAnimationEnd(Animator animation) {
-            setUxState(UX_STATE_NONE_VISIBLE);
+            setUxState(UX_STATE_ONLY_PROGRESS_VISIBLE);
             if (needToShowBars) {
               playerControlView.post(showAllBarsRunnable);
               needToShowBars = false;
@@ -256,7 +316,15 @@ import java.util.List;
         new AnimatorListenerAdapter() {
           @Override
           public void onAnimationStart(Animator animation) {
-            setUxState(UX_STATE_ANIMATING_HIDE);
+            uxState = UX_STATE_ANIMATING_HIDE;
+          }
+
+          @Override
+          public void onAnimationCancel(Animator animation) {
+            if (timeBar != null){
+              timeBar.setAlpha(1);
+              timeBar.setVisibility(View.VISIBLE);
+            }
           }
 
           @Override
@@ -269,8 +337,9 @@ import java.util.List;
           }
         });
     hideProgressBarAnimator
-        .play(ofTranslationY(translationYForProgressBar, translationYForNoBars, timeBar))
-        .with(ofTranslationY(translationYForProgressBar, translationYForNoBars, bottomBar));
+        .play(fadeOutAnimatorProgress);
+//        .play(ofTranslationY(translationYForProgressBar, translationYForNoBars, timeBar))
+//        .with(ofTranslationY(translationYForProgressBar, translationYForNoBars, bottomBar));
 
     hideAllBarsAnimator = new AnimatorSet();
     hideAllBarsAnimator.setDuration(DURATION_FOR_HIDING_ANIMATION_MS);
@@ -292,6 +361,7 @@ import java.util.List;
         });
     hideAllBarsAnimator
         .play(fadeOutAnimator)
+        .with(fadeOutAnimatorProgress)
 /*        .with(ofTranslationY(0, translationYForNoBars, timeBar))
         .with(ofTranslationY(0, translationYForNoBars, bottomBar))*/;
 
@@ -330,6 +400,7 @@ import java.util.List;
         });
     showAllBarsAnimator
         .play(fadeInAnimator)
+        .with(fadeInAnimatorProgress)
 /*        .with(ofTranslationY(translationYForNoBars, 0, timeBar))
         .with(ofTranslationY(translationYForNoBars, 0, bottomBar))*/;
 
@@ -387,6 +458,42 @@ import java.util.List;
     showAllBars();
   }
 
+  public void showProgress(){
+    if (uxState != UX_STATE_ALL_VISIBLE && uxState != UX_STATE_ANIMATING_SHOW){
+      showProgressOnly();
+    }
+  }
+
+  public void showProgressOnly(){
+    if (uxState != UX_STATE_ONLY_PROGRESS_VISIBLE) {
+      removeHideCallbacks();
+
+      if (controlsBackground != null) {
+        controlsBackground.setVisibility(View.INVISIBLE);
+      }
+      if (centerControls != null) {
+        centerControls.setVisibility(View.INVISIBLE);
+      }
+      if (bottomControllers != null) {
+        bottomControllers.setVisibility(View.INVISIBLE);
+      }
+      if (topControllers != null) {
+        topControllers.setVisibility(View.INVISIBLE);
+      }
+      if (minimalControls != null) {
+        minimalControls.setVisibility(View.INVISIBLE);
+      }
+      if (timeBar != null) {
+        timeBar.setAlpha(1);
+        timeBar.setVisibility(View.VISIBLE);
+      }
+    }
+    if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
+      ((DefaultTimeBar) timeBar).hideScrubber(false);
+    }
+    setUxStateProgressOnly();
+  }
+
   private void showAllBarsImmediately(){
     if (controlsBackground != null) {
       controlsBackground.setAlpha(1);
@@ -407,6 +514,11 @@ import java.util.List;
     if (minimalControls != null) {
       minimalControls.setAlpha(1);
       minimalControls.setVisibility(isMinimalMode ? View.VISIBLE : View.INVISIBLE);
+    }
+    hideProgressBarAnimator.cancel();
+    if (timeBar != null){
+      timeBar.setAlpha(1);
+      timeBar.setVisibility(View.VISIBLE);
     }
     if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
       ((DefaultTimeBar) timeBar).showScrubber();
@@ -460,14 +572,17 @@ import java.util.List;
     }
     removeHideCallbacks();
     int showTimeoutMs = playerControlView.getShowTimeoutMs();
+    int showTimeoutMsProgress = playerControlView.getShowTimeoutMsProgress();
     if (showTimeoutMs > 0) {
       if (!animationEnabled) {
         postDelayedRunnable(hideControllerRunnable, showTimeoutMs);
       } else if (uxState == UX_STATE_ONLY_PROGRESS_VISIBLE) {
-        postDelayedRunnable(hideProgressBarRunnable, ANIMATION_INTERVAL_MS);
+        postDelayedRunnable(hideProgressBarRunnable, showTimeoutMsProgress);
       } else {
-        postDelayedRunnable(hideMainBarRunnable, showTimeoutMs);
+        postDelayedRunnable(hideAllBarsRunnable, showTimeoutMs);
       }
+    }else if (uxState == UX_STATE_ONLY_PROGRESS_VISIBLE){
+      postDelayedRunnable(hideProgressBarRunnable, showTimeoutMsProgress);
     }
   }
 
@@ -488,6 +603,10 @@ import java.util.List;
 
   public boolean isFullyVisible() {
     return uxState == UX_STATE_ALL_VISIBLE && playerControlView.isVisible();
+  }
+
+  public boolean isOnlyProgressVisible(){
+    return uxState == UX_STATE_ONLY_PROGRESS_VISIBLE && playerControlView.isVisible();
   }
 
   public void setShowButton(@Nullable View button, boolean showButton) {
@@ -524,6 +643,19 @@ import java.util.List;
     if (prevUxState != uxState) {
       playerControlView.notifyOnVisibilityChange();
     }
+  }
+
+  private void setUxStateProgressOnly(){
+    int prevUxState = this.uxState;
+    this.uxState = UX_STATE_ONLY_PROGRESS_VISIBLE;
+    if (prevUxState == UX_STATE_NONE_VISIBLE) {
+      playerControlView.setVisibility(View.VISIBLE);
+    }
+
+    if (prevUxState != UX_STATE_ONLY_PROGRESS_VISIBLE) {
+      playerControlView.notifyOnVisibilityChange();
+    }
+    resetHideCallbacks();
   }
 
   public void onLayout(boolean changed, int left, int top, int right, int bottom) {
@@ -601,7 +733,7 @@ import java.util.List;
 
   private void hideMainBar() {
     hideMainBarAnimator.start();
-//    postDelayedRunnable(hideProgressBarRunnable, ANIMATION_INTERVAL_MS);
+    postDelayedRunnable(hideProgressBarRunnable, ANIMATION_INTERVAL_MS);
   }
 
   private void hideController() {

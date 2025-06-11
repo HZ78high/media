@@ -355,6 +355,8 @@ public class PlayerControlView extends FrameLayout {
   /** The default show timeout, in milliseconds. */
   public static final int DEFAULT_SHOW_TIMEOUT_MS = 5_000;
 
+  public static final int DEFAULT_ANIMATION_INTERVAL_MS = 2_000;
+
   /** The default repeat toggle modes. */
   public static final @RepeatModeUtil.RepeatToggleModes int DEFAULT_REPEAT_TOGGLE_MODES =
       RepeatModeUtil.REPEAT_TOGGLE_MODE_NONE;
@@ -463,6 +465,7 @@ public class PlayerControlView extends FrameLayout {
   private boolean multiWindowTimeBar;
   private boolean scrubbing;
   private int showTimeoutMs;
+  private int showTimeoutMsProgress;
   private boolean timeBarScrubbingEnabled;
   private int timeBarMinUpdateIntervalMs;
   private @RepeatModeUtil.RepeatToggleModes int repeatToggleModes;
@@ -521,6 +524,7 @@ public class PlayerControlView extends FrameLayout {
 
     showPlayButtonIfSuppressed = true;
     showTimeoutMs = DEFAULT_SHOW_TIMEOUT_MS;
+    showTimeoutMsProgress = DEFAULT_ANIMATION_INTERVAL_MS;
     repeatToggleModes = DEFAULT_REPEAT_TOGGLE_MODES;
     timeBarMinUpdateIntervalMs = DEFAULT_TIME_BAR_MIN_UPDATE_INTERVAL_MS;
     boolean showRewindButton = true;
@@ -1029,6 +1033,10 @@ public class PlayerControlView extends FrameLayout {
     return showTimeoutMs;
   }
 
+  public int getShowTimeoutMsProgress(){
+    return showTimeoutMsProgress;
+  }
+
   /**
    * Sets the playback controls timeout. The playback controls are automatically hidden after this
    * duration of time has elapsed without user input.
@@ -1039,6 +1047,13 @@ public class PlayerControlView extends FrameLayout {
   public void setShowTimeoutMs(int showTimeoutMs) {
     this.showTimeoutMs = showTimeoutMs;
     if (isFullyVisible()) {
+      controlViewLayoutManager.resetHideCallbacks();
+    }
+  }
+
+  public void setShowTimeoutMsProgress(int showTimeoutMsProgress){
+    this.showTimeoutMsProgress = showTimeoutMsProgress;
+    if (isOnlyProgressVisible()){
       controlViewLayoutManager.resetHideCallbacks();
     }
   }
@@ -1196,6 +1211,14 @@ public class PlayerControlView extends FrameLayout {
     controlViewLayoutManager.show();
   }
 
+  public void showProgressOnly(){
+    controlViewLayoutManager.showProgressOnly();
+  }
+
+  public void showProgress(){
+    controlViewLayoutManager.showProgress();
+  }
+
   /** Hides the controller. */
   public void hide() {
     controlViewLayoutManager.hide();
@@ -1213,6 +1236,10 @@ public class PlayerControlView extends FrameLayout {
   /** Returns whether the controller is fully visible, which means all UI controls are visible. */
   public boolean isFullyVisible() {
     return controlViewLayoutManager.isFullyVisible();
+  }
+
+  public boolean isOnlyProgressVisible(){
+    return controlViewLayoutManager.isOnlyProgressVisible();
   }
 
   /** Returns whether the controller is currently visible. */
