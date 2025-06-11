@@ -972,6 +972,11 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     return controller != null && controller.isFullyVisible();
   }
 
+  @UnstableApi
+  public boolean isOnlyProgressVisible(){
+    return controller != null && controller.isOnlyProgressVisible();
+  }
+
   /**
    * Shows the playback controls. Does nothing if playback controls are disabled.
    *
@@ -989,6 +994,20 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   public void hideController() {
     if (controller != null) {
       controller.hide();
+    }
+  }
+
+  @UnstableApi
+  public void showProgressOnly(){
+    if (controller !=null){
+      controller.showProgressOnly();
+    }
+  }
+
+  @UnstableApi
+  public void showProgress(){
+    if (controller != null){
+      controller.showProgress();
     }
   }
 
