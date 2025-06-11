@@ -50,4 +50,4 @@ ext {
     releaseArtifactId = 'media3-ui'
     releaseName = 'Media3 UI module'
 }
-apply from: '../../publish.gradle'
+apply from: '../../publish_local.gradle'
