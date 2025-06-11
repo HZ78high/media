@@ -1255,6 +1255,10 @@ public class PlayerControlView extends FrameLayout {
     controlViewLayoutManager.hide();
   }
 
+  public void showImmediately(){
+    controlViewLayoutManager.showImmediately();
+  }
+
   /** Hides the controller without any animation. */
   public void hideImmediately() {
     controlViewLayoutManager.hideImmediately();
