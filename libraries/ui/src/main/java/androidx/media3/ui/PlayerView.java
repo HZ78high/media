@@ -995,6 +995,20 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     }
   }
 
+  @UnstableApi
+  public void showControllerImmediately(){
+    if (controller != null){
+      controller.showImmediately();
+    }
+  }
+
+  @UnstableApi
+  public void hideControllerImmediately(){
+    if (controller != null){
+      controller.hideImmediately();
+    }
+  }
+
   /**
    * Returns the playback controls timeout. The playback controls are automatically hidden after
    * this duration of time has elapsed without user input and with playback or buffering in
@@ -1861,12 +1875,12 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
 
     // Player.Listener implementation
 
-    @Override
-    public void onCues(CueGroup cueGroup) {
-      if (subtitleView != null) {
-        subtitleView.setCues(cueGroup.cues);
-      }
-    }
+//    @Override
+//    public void onCues(CueGroup cueGroup) {
+//      if (subtitleView != null) {
+//        subtitleView.setCues(cueGroup.cues);
+//      }
+//    }
 
     @Override
     public void onVideoSizeChanged(VideoSize videoSize) {

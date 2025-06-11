@@ -53,6 +53,8 @@ import java.util.List;
   @Nullable private final View controlsBackground;
   @Nullable private final ViewGroup centerControls;
   @Nullable private final ViewGroup bottomBar;
+  @Nullable private final ViewGroup topControllers;
+  @Nullable private final ViewGroup bottomControllers;
   @Nullable private final ViewGroup minimalControls;
   @Nullable private final ViewGroup basicControls;
   @Nullable private final ViewGroup extraControls;
@@ -105,6 +107,8 @@ import java.util.List;
 
     // Relating to Bottom Bar View
     bottomBar = playerControlView.findViewById(R.id.exo_bottom_bar);
+    topControllers = playerControlView.findViewById(R.id.exo_top_controls);
+    bottomControllers = playerControlView.findViewById(R.id.exo_bottom_controls);
 
     // Relating to Bottom Bar Left View
     timeView = playerControlView.findViewById(R.id.exo_time);
@@ -132,6 +136,12 @@ import java.util.List;
           if (centerControls != null) {
             centerControls.setAlpha(animatedValue);
           }
+          if (bottomControllers != null){
+            bottomControllers.setAlpha(animatedValue);
+          }
+          if (topControllers != null){
+            topControllers.setAlpha(animatedValue);
+          }
           if (minimalControls != null) {
             minimalControls.setAlpha(animatedValue);
           }
@@ -153,6 +163,12 @@ import java.util.List;
             if (centerControls != null) {
               centerControls.setVisibility(View.INVISIBLE);
             }
+            if (bottomControllers != null){
+              bottomControllers.setVisibility(View.INVISIBLE);
+            }
+            if (topControllers != null){
+              topControllers.setVisibility(View.INVISIBLE);
+            }
             if (minimalControls != null) {
               minimalControls.setVisibility(View.INVISIBLE);
             }
@@ -170,6 +186,12 @@ import java.util.List;
           if (centerControls != null) {
             centerControls.setAlpha(animatedValue);
           }
+          if (bottomControllers != null){
+            bottomControllers.setAlpha(animatedValue);
+          }
+          if (topControllers != null){
+            topControllers.setAlpha(animatedValue);
+          }
           if (minimalControls != null) {
             minimalControls.setAlpha(animatedValue);
           }
@@ -183,6 +205,12 @@ import java.util.List;
             }
             if (centerControls != null) {
               centerControls.setVisibility(View.VISIBLE);
+            }
+            if (bottomControllers != null){
+              bottomControllers.setVisibility(View.VISIBLE);
+            }
+            if (topControllers != null){
+              topControllers.setVisibility(View.VISIBLE);
             }
             if (minimalControls != null) {
               minimalControls.setVisibility(isMinimalMode ? View.VISIBLE : View.INVISIBLE);
@@ -210,7 +238,7 @@ import java.util.List;
 
           @Override
           public void onAnimationEnd(Animator animation) {
-            setUxState(UX_STATE_ONLY_PROGRESS_VISIBLE);
+            setUxState(UX_STATE_NONE_VISIBLE);
             if (needToShowBars) {
               playerControlView.post(showAllBarsRunnable);
               needToShowBars = false;
@@ -219,8 +247,8 @@ import java.util.List;
         });
     hideMainBarAnimator
         .play(fadeOutAnimator)
-        .with(ofTranslationY(0, translationYForProgressBar, timeBar))
-        .with(ofTranslationY(0, translationYForProgressBar, bottomBar));
+/*        .with(ofTranslationY(0, translationYForProgressBar, timeBar))
+        .with(ofTranslationY(0, translationYForProgressBar, bottomBar))*/;
 
     hideProgressBarAnimator = new AnimatorSet();
     hideProgressBarAnimator.setDuration(DURATION_FOR_HIDING_ANIMATION_MS);
@@ -264,8 +292,8 @@ import java.util.List;
         });
     hideAllBarsAnimator
         .play(fadeOutAnimator)
-        .with(ofTranslationY(0, translationYForNoBars, timeBar))
-        .with(ofTranslationY(0, translationYForNoBars, bottomBar));
+/*        .with(ofTranslationY(0, translationYForNoBars, timeBar))
+        .with(ofTranslationY(0, translationYForNoBars, bottomBar))*/;
 
     showMainBarAnimator = new AnimatorSet();
     showMainBarAnimator.setDuration(DURATION_FOR_SHOWING_ANIMATION_MS);
@@ -283,8 +311,8 @@ import java.util.List;
         });
     showMainBarAnimator
         .play(fadeInAnimator)
-        .with(ofTranslationY(translationYForProgressBar, 0, timeBar))
-        .with(ofTranslationY(translationYForProgressBar, 0, bottomBar));
+/*        .with(ofTranslationY(translationYForProgressBar, 0, timeBar))
+        .with(ofTranslationY(translationYForProgressBar, 0, bottomBar))*/;
 
     showAllBarsAnimator = new AnimatorSet();
     showAllBarsAnimator.setDuration(DURATION_FOR_SHOWING_ANIMATION_MS);
@@ -302,8 +330,8 @@ import java.util.List;
         });
     showAllBarsAnimator
         .play(fadeInAnimator)
-        .with(ofTranslationY(translationYForNoBars, 0, timeBar))
-        .with(ofTranslationY(translationYForNoBars, 0, bottomBar));
+/*        .with(ofTranslationY(translationYForNoBars, 0, timeBar))
+        .with(ofTranslationY(translationYForNoBars, 0, bottomBar))*/;
 
     overflowShowAnimator = ValueAnimator.ofFloat(0.0f, 1.0f);
     overflowShowAnimator.setDuration(DURATION_FOR_SHOWING_ANIMATION_MS);
@@ -357,6 +385,43 @@ import java.util.List;
       playerControlView.requestPlayPauseFocus();
     }
     showAllBars();
+  }
+
+  private void showAllBarsImmediately(){
+    if (controlsBackground != null) {
+      controlsBackground.setAlpha(1);
+      controlsBackground.setVisibility(View.VISIBLE);
+    }
+    if (centerControls != null) {
+      centerControls.setAlpha(1);
+      centerControls.setVisibility(View.VISIBLE);
+    }
+    if (bottomControllers != null){
+      bottomControllers.setAlpha(1);
+      bottomControllers.setVisibility(View.VISIBLE);
+    }
+    if (topControllers != null){
+      topControllers.setAlpha(1);
+      topControllers.setVisibility(View.VISIBLE);
+    }
+    if (minimalControls != null) {
+      minimalControls.setAlpha(1);
+      minimalControls.setVisibility(isMinimalMode ? View.VISIBLE : View.INVISIBLE);
+    }
+    if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
+      ((DefaultTimeBar) timeBar).showScrubber();
+    }
+  }
+
+  public void showImmediately(){
+    if (!playerControlView.isVisible()) {
+      playerControlView.setVisibility(View.VISIBLE);
+      playerControlView.updateAll();
+      playerControlView.requestPlayPauseFocus();
+    }
+    resetHideCallbacks();
+    setUxState(UX_STATE_ALL_VISIBLE);
+    showAllBarsImmediately();
   }
 
   public void hide() {
@@ -481,11 +546,11 @@ import java.util.List;
       int oldRight,
       int oldBottom) {
 
-    boolean useMinimalMode = useMinimalMode();
-    if (isMinimalMode != useMinimalMode) {
-      isMinimalMode = useMinimalMode;
-      v.post(this::updateLayoutForSizeChange);
-    }
+//    boolean useMinimalMode = useMinimalMode();
+//    if (isMinimalMode != useMinimalMode) {
+//      isMinimalMode = useMinimalMode;
+//      v.post(this::updateLayoutForSizeChange);
+//    }
     boolean widthChanged = (right - left) != (oldRight - oldLeft);
     if (!isMinimalMode && widthChanged) {
       v.post(this::onLayoutWidthChanged);
@@ -536,7 +601,7 @@ import java.util.List;
 
   private void hideMainBar() {
     hideMainBarAnimator.start();
-    postDelayedRunnable(hideProgressBarRunnable, ANIMATION_INTERVAL_MS);
+//    postDelayedRunnable(hideProgressBarRunnable, ANIMATION_INTERVAL_MS);
   }
 
   private void hideController() {
