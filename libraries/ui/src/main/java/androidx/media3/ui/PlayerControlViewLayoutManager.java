@@ -148,12 +148,12 @@ import java.util.List;
         });
     fadeOutAnimator.addListener(
         new AnimatorListenerAdapter() {
-          @Override
-          public void onAnimationStart(Animator animation) {
-            if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
-              ((DefaultTimeBar) timeBar).hideScrubber(DURATION_FOR_HIDING_ANIMATION_MS);
-            }
-          }
+//          @Override
+//          public void onAnimationStart(Animator animation) {
+//            if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
+//              ((DefaultTimeBar) timeBar).hideScrubber(DURATION_FOR_HIDING_ANIMATION_MS);
+//            }
+//          }
 
           @Override
           public void onAnimationEnd(Animator animation) {
@@ -182,6 +182,9 @@ import java.util.List;
           if (timeBar != null){
             timeBar.setAlpha(animatedValue);
           }
+          if (timeView != null){
+            timeView.setAlpha(animatedValue);
+          }
         }
     );
     fadeOutAnimatorProgress.addListener(
@@ -202,6 +205,9 @@ import java.util.List;
           public void onAnimationEnd(Animator animation) {
             if (timeBar !=null){
               timeBar.setVisibility(View.INVISIBLE);
+            }
+            if (timeView != null){
+              timeView.setVisibility(View.INVISIBLE);
             }
           }
         }
@@ -260,6 +266,9 @@ import java.util.List;
           if (timeBar != null){
             timeBar.setAlpha(animatedValue);
           }
+          if (timeView != null){
+            timeView.setAlpha(animatedValue);
+          }
         }
     );
     fadeInAnimatorProgress.addListener(
@@ -274,8 +283,8 @@ import java.util.List;
             if (timeBar != null) {
               timeBar.setVisibility(View.VISIBLE);
             }
-            if (timeBar instanceof DefaultTimeBar && !isMinimalMode ) {
-              ((DefaultTimeBar) timeBar).showScrubber(DURATION_FOR_SHOWING_ANIMATION_MS);
+            if (timeView != null){
+              timeView.setVisibility(View.VISIBLE);
             }
           }
         }
@@ -324,6 +333,10 @@ import java.util.List;
             if (timeBar != null){
               timeBar.setAlpha(1);
               timeBar.setVisibility(View.VISIBLE);
+            }
+            if (timeView != null){
+              timeView.setAlpha(1);
+              timeView.setVisibility(View.VISIBLE);
             }
           }
 
@@ -489,6 +502,10 @@ import java.util.List;
         timeBar.setAlpha(1);
         timeBar.setVisibility(View.VISIBLE);
       }
+      if (timeView != null){
+        timeView.setAlpha(1);
+        timeView.setVisibility(View.VISIBLE);
+      }
     }
     if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
       ((DefaultTimeBar) timeBar).hideScrubber(false);
@@ -523,6 +540,10 @@ import java.util.List;
     if (timeBar != null){
       timeBar.setAlpha(1);
       timeBar.setVisibility(View.VISIBLE);
+    }
+    if (timeView != null){
+      timeView.setAlpha(1);
+      timeView.setVisibility(View.VISIBLE);
     }
     if (timeBar instanceof DefaultTimeBar && !isMinimalMode) {
       ((DefaultTimeBar) timeBar).showScrubber();
@@ -585,7 +606,7 @@ import java.util.List;
       } else {
         postDelayedRunnable(hideAllBarsRunnable, showTimeoutMs);
       }
-    }else if (uxState == UX_STATE_ONLY_PROGRESS_VISIBLE){
+    }else if (uxState == UX_STATE_ONLY_PROGRESS_VISIBLE && showTimeoutMsProgress > 0){
       postDelayedRunnable(hideProgressBarRunnable, showTimeoutMsProgress);
     }
   }
@@ -652,7 +673,7 @@ import java.util.List;
   private void setUxStateProgressOnly(){
     int prevUxState = this.uxState;
     this.uxState = UX_STATE_ONLY_PROGRESS_VISIBLE;
-    if (prevUxState != UX_STATE_NONE_VISIBLE) {
+    if (prevUxState != UX_STATE_ONLY_PROGRESS_VISIBLE) {
       playerControlView.setVisibility(View.VISIBLE);
       playerControlView.notifyOnVisibilityChange();
     }
