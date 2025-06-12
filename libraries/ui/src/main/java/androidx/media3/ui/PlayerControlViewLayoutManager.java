@@ -239,10 +239,10 @@ import java.util.List;
               centerControls.setVisibility(View.VISIBLE);
             }
             if (bottomControllers != null){
-              bottomControllers.setVisibility(View.VISIBLE);
+              bottomControllers.setVisibility(isMinimalMode ? View.INVISIBLE : View.VISIBLE);
             }
             if (topControllers != null){
-              topControllers.setVisibility(View.VISIBLE);
+              topControllers.setVisibility(isMinimalMode ? View.INVISIBLE : View.VISIBLE);
             }
             if (minimalControls != null) {
               minimalControls.setVisibility(isMinimalMode ? View.VISIBLE : View.INVISIBLE);
@@ -467,6 +467,8 @@ import java.util.List;
   public void showProgressOnly(){
     if (uxState != UX_STATE_ONLY_PROGRESS_VISIBLE) {
       removeHideCallbacks();
+      hideAllBarsAnimator.cancel();
+      hideProgressBarAnimator.cancel();
 
       if (controlsBackground != null) {
         controlsBackground.setVisibility(View.INVISIBLE);
@@ -495,6 +497,9 @@ import java.util.List;
   }
 
   private void showAllBarsImmediately(){
+    hideProgressBarAnimator.cancel();
+    hideAllBarsAnimator.cancel();
+    hideMainBarAnimator.cancel();
     if (controlsBackground != null) {
       controlsBackground.setAlpha(1);
       controlsBackground.setVisibility(View.VISIBLE);
@@ -505,17 +510,16 @@ import java.util.List;
     }
     if (bottomControllers != null){
       bottomControllers.setAlpha(1);
-      bottomControllers.setVisibility(View.VISIBLE);
+      bottomControllers.setVisibility(isMinimalMode ? View.INVISIBLE : View.VISIBLE);
     }
     if (topControllers != null){
       topControllers.setAlpha(1);
-      topControllers.setVisibility(View.VISIBLE);
+      topControllers.setVisibility(isMinimalMode ? View.INVISIBLE : View.VISIBLE);
     }
     if (minimalControls != null) {
       minimalControls.setAlpha(1);
       minimalControls.setVisibility(isMinimalMode ? View.VISIBLE : View.INVISIBLE);
     }
-    hideProgressBarAnimator.cancel();
     if (timeBar != null){
       timeBar.setAlpha(1);
       timeBar.setVisibility(View.VISIBLE);
@@ -648,11 +652,8 @@ import java.util.List;
   private void setUxStateProgressOnly(){
     int prevUxState = this.uxState;
     this.uxState = UX_STATE_ONLY_PROGRESS_VISIBLE;
-    if (prevUxState == UX_STATE_NONE_VISIBLE) {
+    if (prevUxState != UX_STATE_NONE_VISIBLE) {
       playerControlView.setVisibility(View.VISIBLE);
-    }
-
-    if (prevUxState != UX_STATE_ONLY_PROGRESS_VISIBLE) {
       playerControlView.notifyOnVisibilityChange();
     }
     resetHideCallbacks();
@@ -678,11 +679,11 @@ import java.util.List;
       int oldRight,
       int oldBottom) {
 
-//    boolean useMinimalMode = useMinimalMode();
-//    if (isMinimalMode != useMinimalMode) {
-//      isMinimalMode = useMinimalMode;
-//      v.post(this::updateLayoutForSizeChange);
-//    }
+    boolean useMinimalMode = useMinimalMode();
+    if (isMinimalMode != useMinimalMode) {
+      isMinimalMode = useMinimalMode;
+      v.post(this::updateLayoutForSizeChange);
+    }
     boolean widthChanged = (right - left) != (oldRight - oldLeft);
     if (!isMinimalMode && widthChanged) {
       v.post(this::onLayoutWidthChanged);
@@ -805,6 +806,10 @@ import java.util.List;
           playerControlView
               .getResources()
               .getDimensionPixelSize(R.dimen.exo_styled_progress_margin_bottom);
+      if (bottomControllers != null) {
+        float density = playerControlView.getResources().getDisplayMetrics().density;
+        timeBarMarginBottom = (int) (48 * density + 0.5f);
+      }
       @Nullable MarginLayoutParams timeBarParams = (MarginLayoutParams) timeBar.getLayoutParams();
       if (timeBarParams != null) {
         timeBarParams.bottomMargin = (isMinimalMode ? 0 : timeBarMarginBottom);
@@ -830,6 +835,8 @@ import java.util.List;
   private boolean shouldHideInMinimalMode(View button) {
     int id = button.getId();
     return (id == R.id.exo_bottom_bar
+        || id == R.id.exo_top_controls
+        || id == R.id.exo_bottom_controls
         || id == R.id.exo_prev
         || id == R.id.exo_next
         || id == R.id.exo_rew
