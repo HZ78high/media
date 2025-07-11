@@ -416,6 +416,35 @@ public final class C {
   public static final int VOLUME_FLAG_VIBRATE = AudioManager.FLAG_VIBRATE;
 
   /**
+   * Volume operation type. One of:
+   *
+   * <ul>
+   *   <li>{@link #VOLUME_OPERATION_TYPE_SET_VOLUME}
+   *   <li>{@link #VOLUME_OPERATION_TYPE_MUTE}
+   *   <li>{@link #VOLUME_OPERATION_TYPE_UNMUTE}
+   * </ul>
+   */
+  @UnstableApi
+  @Documented
+  @Retention(RetentionPolicy.SOURCE)
+  @Target({TYPE_USE})
+  @IntDef({
+    VOLUME_OPERATION_TYPE_SET_VOLUME,
+    VOLUME_OPERATION_TYPE_MUTE,
+    VOLUME_OPERATION_TYPE_UNMUTE,
+  })
+  public @interface VolumeOperationType {}
+
+  /** A volume operation type constant for direct setting of the Player volume. */
+  @UnstableApi public static final int VOLUME_OPERATION_TYPE_SET_VOLUME = 0;
+
+  /** A volume operation type constant for muting. */
+  @UnstableApi public static final int VOLUME_OPERATION_TYPE_MUTE = 1;
+
+  /** A volume operation type constant for unmuting. */
+  @UnstableApi public static final int VOLUME_OPERATION_TYPE_UNMUTE = 2;
+
+  /**
    * Content types for audio attributes. One of:
    *
    * <ul>
@@ -1669,17 +1698,24 @@ public final class C {
   @UnstableApi public static final int FORMAT_UNSUPPORTED_DRM = 0b010;
 
   /**
-   * Formats with the same top-level type are generally supported, but not this format or any other
-   * format with the same MIME type because the sub-type is not supported.
+   * Formats with the same type of media (e.g. video, audio, image or text) are generally supported,
+   * but not this format.
    *
-   * <p>Example: The player supports audio and the format's MIME type matches audio/[subtype], but
-   * there does not exist a suitable decoder for [subtype].
+   * <p>Example: The player supports audio and the format's {@linkplain MimeTypes#isAudio(String)
+   * MIME type is for audio}, but there does not exist a suitable decoder for this format's MIME
+   * type.
+   *
+   * @see MimeTypes#isAudio(String)
+   * @see MimeTypes#isVideo(String)
+   * @see MimeTypes#isImage(String)
+   * @see MimeTypes#isText(String)
    */
   @UnstableApi public static final int FORMAT_UNSUPPORTED_SUBTYPE = 0b001;
 
   /**
-   * The format is unsupported, because no formats with the same top-level type are supported or
-   * there is only specialized support for different MIME types of the same top-level type.
+   * The format is unsupported, because no formats with the same type of media (e.g. video, audio,
+   * image or text) are supported or there is only specialized support for different MIME types of
+   * the same type.
    *
    * <p>Example 1: The player is a general purpose audio player, but the format has a video MIME
    * type.

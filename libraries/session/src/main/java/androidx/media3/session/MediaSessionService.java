@@ -251,6 +251,8 @@ public abstract class MediaSessionService extends Service {
    * Return a {@link MediaSession} that the controller will connect to, or {@code null} to reject
    * the connection request.
    *
+   * <p>Note: This method must not be called directly by app code.
+   *
    * <p>The service automatically maintains the returned sessions. In other words, a session
    * returned by this method will be added to the service, and removed from the service when the
    * session is closed. You don't need to manually call {@link #addSession(MediaSession)} nor {@link
@@ -559,7 +561,7 @@ public abstract class MediaSessionService extends Service {
    * <p>This method must be called on the main thread.
    */
   @UnstableApi
-  public boolean isPlaybackOngoing() {
+  public final boolean isPlaybackOngoing() {
     return getMediaNotificationManager().isStartedInForeground();
   }
 
@@ -573,7 +575,7 @@ public abstract class MediaSessionService extends Service {
    * <p>This method must be called on the main thread.
    */
   @UnstableApi
-  public void pauseAllPlayersAndStopSelf() {
+  public final void pauseAllPlayersAndStopSelf() {
     getMediaNotificationManager().disableUserEngagedTimeout();
     List<MediaSession> sessionList = getSessions();
     for (int i = 0; i < sessionList.size(); i++) {
@@ -648,6 +650,8 @@ public abstract class MediaSessionService extends Service {
    * Called when a notification needs to be updated. Override this method to show or cancel your own
    * notifications.
    *
+   * <p>Note: This method must not be called directly by app code.
+   *
    * <p>This method is called whenever the service has detected a change that requires to show,
    * update or cancel a notification with a flag {@code startInForegroundRequired} suggested by the
    * service whether starting in the foreground is required. The method will be called on the
@@ -676,6 +680,20 @@ public abstract class MediaSessionService extends Service {
     onUpdateNotification(session);
     if (defaultMethodCalled) {
       getMediaNotificationManager().updateNotification(session, startInForegroundRequired);
+    }
+  }
+
+  /**
+   * Manually trigger a notification update.
+   *
+   * <p>In most cases, this should not be required unless an external event that can't be detected
+   * by the session itself requires to update the notification.
+   */
+  @UnstableApi
+  public final void triggerNotificationUpdate() {
+    List<MediaSession> sessions = getSessions();
+    for (int i = 0; i < sessions.size(); i++) {
+      onUpdateNotificationInternal(sessions.get(i), /* startInForegroundWhenPaused= */ false);
     }
   }
 
@@ -844,6 +862,16 @@ public abstract class MediaSessionService extends Service {
       int uid = Binder.getCallingUid();
       long token = Binder.clearCallingIdentity();
       int pid = (callingPid != 0) ? callingPid : request.pid;
+      if (!SessionUtil.isValidPackage(mediaSessionService, request.packageName, uid)) {
+        Log.w(
+            TAG,
+            "Ignoring connection from invalid package name "
+                + request.packageName
+                + " (uid="
+                + uid
+                + ")");
+        return;
+      }
       MediaSessionManager.RemoteUserInfo remoteUserInfo =
           new MediaSessionManager.RemoteUserInfo(request.packageName, pid, uid);
       boolean isTrusted =

@@ -26,7 +26,9 @@ package androidx.media3.common {
   }
 
   public final class AudioAttributes {
-    method public androidx.media3.common.AudioAttributes.AudioAttributesV21 getAudioAttributesV21();
+    method public static androidx.media3.common.AudioAttributes fromPlatformAudioAttributes(android.media.AudioAttributes);
+    method @Deprecated public androidx.media3.common.AudioAttributes.AudioAttributesV21 getAudioAttributesV21();
+    method public android.media.AudioAttributes getPlatformAudioAttributes();
     field public static final androidx.media3.common.AudioAttributes DEFAULT;
     field @androidx.media3.common.C.AudioAllowedCapturePolicy public final int allowedCapturePolicy;
     field @androidx.media3.common.C.AudioContentType public final int contentType;
@@ -35,8 +37,8 @@ package androidx.media3.common {
     field @androidx.media3.common.C.AudioUsage public final int usage;
   }
 
-  public static final class AudioAttributes.AudioAttributesV21 {
-    field public final android.media.AudioAttributes audioAttributes;
+  @Deprecated public static final class AudioAttributes.AudioAttributesV21 {
+    field @Deprecated public final android.media.AudioAttributes audioAttributes;
   }
 
   public static final class AudioAttributes.Builder {
@@ -1570,8 +1572,10 @@ package androidx.media3.session {
     field public static final int ICON_VOLUME_OFF = 57423; // 0xe04f
     field public static final int ICON_VOLUME_UP = 57424; // 0xe050
     field public final CharSequence displayName;
+    field public final android.os.Bundle extras;
     field @androidx.media3.session.CommandButton.Icon public final int icon;
     field @DrawableRes public final int iconResId;
+    field @Nullable public final android.net.Uri iconUri;
     field public final boolean isEnabled;
     field @androidx.media3.common.Player.Command public final int playerCommand;
     field @Nullable public final androidx.media3.session.SessionCommand sessionCommand;
@@ -1586,6 +1590,7 @@ package androidx.media3.session {
     method public androidx.media3.session.CommandButton.Builder setEnabled(boolean);
     method public androidx.media3.session.CommandButton.Builder setExtras(android.os.Bundle);
     method @Deprecated public androidx.media3.session.CommandButton.Builder setIconResId(@DrawableRes int);
+    method public androidx.media3.session.CommandButton.Builder setIconUri(android.net.Uri);
     method public androidx.media3.session.CommandButton.Builder setPlayerCommand(@androidx.media3.common.Player.Command int);
     method public androidx.media3.session.CommandButton.Builder setSessionCommand(androidx.media3.session.SessionCommand);
   }

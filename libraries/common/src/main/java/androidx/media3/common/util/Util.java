@@ -2401,6 +2401,7 @@ public final class Util {
         return 28;
       case C.ENCODING_OPUS:
         return 30;
+      case C.ENCODING_PCM_24BIT:
       case C.ENCODING_PCM_32BIT:
         return 31;
       case C.ENCODING_DTS_UHD_P2:
@@ -2786,6 +2787,19 @@ public final class Util {
     return hours > 0
         ? formatter.format("%s%d:%02d:%02d", prefix, hours, minutes, seconds).toString()
         : formatter.format("%s%02d:%02d", prefix, minutes, seconds).toString();
+  }
+
+  /**
+   * Returns the specified millisecond time formatted as a string.
+   *
+   * @param timeMs The time to format as a string, in milliseconds.
+   * @return The time formatted as a string.
+   */
+  @UnstableApi
+  public static String getStringForTime(long timeMs) {
+    StringBuilder builder = new StringBuilder();
+    Formatter formatter = new Formatter(builder, Locale.getDefault());
+    return getStringForTime(builder, formatter, timeMs);
   }
 
   /**

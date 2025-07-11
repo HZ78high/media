@@ -2353,6 +2353,24 @@ public class MediaControllerTest {
   }
 
   @Test
+  public void getUnmuteVolume_returnsUnmuteVolumeOfPlayerInSession_roundTrip() throws Exception {
+    float testVolume = .5f;
+
+    Bundle playerConfig =
+        new RemoteMediaSession.MockPlayerConfigBuilder().setVolume(testVolume).build();
+    remoteSession.setPlayer(playerConfig);
+
+    MediaController controller = controllerTestRule.createController(remoteSession.getToken());
+    threadTestRule.getHandler().postAndSync(controller::mute);
+    float volume = threadTestRule.getHandler().postAndSync(controller::getVolume);
+    assertThat(volume).isEqualTo(0);
+
+    threadTestRule.getHandler().postAndSync(controller::unmute);
+    volume = threadTestRule.getHandler().postAndSync(controller::getVolume);
+    assertThat(volume).isEqualTo(testVolume);
+  }
+
+  @Test
   public void getCurrentMediaItemIndex() throws Exception {
     int testMediaItemIndex = 1;
     Bundle playerConfig =
@@ -2873,9 +2891,6 @@ public class MediaControllerTest {
     for (int i = 1; i <= 100; i++) {
       remoteSession.getMockPlayer().createAndSetFakeTimeline(/* windowCount= */ i);
       remoteSession.getMockPlayer().setCurrentMediaItemIndex(i - 1);
-      remoteSession
-          .getMockPlayer()
-          .notifyTimelineChanged(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED);
       remoteSession
           .getMockPlayer()
           .notifyMediaItemTransition(

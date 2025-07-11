@@ -973,6 +973,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
       throws ExoPlaybackException {
     super.onStreamChanged(formats, startPositionUs, offsetUs, mediaPeriodId);
     updatePeriodDurationUs(mediaPeriodId);
+    if (videoFrameReleaseEarlyTimeForecaster != null) {
+      videoFrameReleaseEarlyTimeForecaster.reset();
+    }
   }
 
   private void updatePeriodDurationUs(MediaSource.MediaPeriodId mediaPeriodId) {
@@ -999,6 +1002,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
     super.onPositionReset(positionUs, joining);
     if (videoSink == null) {
       videoFrameReleaseControl.reset();
+    }
+    if (videoFrameReleaseEarlyTimeForecaster != null) {
+      videoFrameReleaseEarlyTimeForecaster.reset();
     }
     if (joining) {
       // Don't render next frame immediately to let the codec catch up with the playback position
@@ -1046,9 +1052,6 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
     } else {
       videoFrameReleaseControl.onStarted();
     }
-    if (videoFrameReleaseEarlyTimeForecaster != null) {
-      videoFrameReleaseEarlyTimeForecaster.reset();
-    }
   }
 
   @Override
@@ -1059,6 +1062,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
       videoSink.stopRendering();
     } else {
       videoFrameReleaseControl.onStopped();
+    }
+    if (videoFrameReleaseEarlyTimeForecaster != null) {
+      videoFrameReleaseEarlyTimeForecaster.reset();
     }
     super.onStopped();
   }
@@ -1506,11 +1512,22 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
 
   @Override
   protected final boolean shouldFlushCodec() {
+    Format inputFormat = getCodecInputFormat();
+    boolean skippingFlushMayCauseOverflow = true;
+    if (periodDurationUs != C.TIME_UNSET) {
+      long maxPotentialSkippedFlushOffset = periodDurationUs + 1;
+      long maxPotentialSampleTimestamp = getOutputStreamOffsetUs() + periodDurationUs;
+      skippingFlushMayCauseOverflow =
+          getSkippedFlushOffsetUs() + maxPotentialSkippedFlushOffset
+              > Long.MAX_VALUE - maxPotentialSampleTimestamp;
+    }
     return scrubbingModeParameters == null
         ? super.shouldFlushCodec()
-        : scrubbingModeParameters.isMediaCodecFlushEnabled
+        : !scrubbingModeParameters.allowSkippingMediaCodecFlush
             || isFlushRequired
-            || hasSkippedFlushAndWaitingForEarlierFrame()
+            || tunneling
+            || (inputFormat != null && inputFormat.maxNumReorderSamples > 0)
+            || skippingFlushMayCauseOverflow
             || getLastBufferInStreamPresentationTimeUs() != C.TIME_UNSET;
   }
 
@@ -1520,6 +1537,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
       throws ExoPlaybackException {
     @Nullable DecoderReuseEvaluation evaluation = super.onInputFormatChanged(formatHolder);
     eventDispatcher.inputFormatChanged(checkNotNull(formatHolder.format), evaluation);
+    if (videoFrameReleaseEarlyTimeForecaster != null) {
+      // A change in input format is likely to affect decoding speed, making predictions from
+      // the forecaster invalid.
+      // TODO: b/412588892 - Handle the transition when input and output format are different.
+      videoFrameReleaseEarlyTimeForecaster.reset();
+    }
     return evaluation;
   }
 
@@ -1559,7 +1582,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer
         && (enableMediaCodecBufferDecodeOnlyFlag
             || (scrubbingModeParameters != null && scrubbingModeParameters.useDecodeOnlyFlag)
             || tunneling)
-        && isBufferBeforeStartTime(buffer)) {
+        && isBufferBeforeStartTime(buffer)
+        && !isBufferProbablyLastSample(buffer)) {
       // The buffer likely needs to be dropped because its timestamp is less than the start time.
       // If tunneling, we can't decide to do this after decoding because we won't get the buffer
       // back from the codec in tunneling mode. This may not work perfectly, e.g. when the codec is

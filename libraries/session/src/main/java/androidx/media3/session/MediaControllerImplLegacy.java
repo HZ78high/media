@@ -621,6 +621,14 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
   }
 
   @Override
+  public ListenableFuture<SessionResult> sendCustomCommand(
+      SessionCommand command,
+      Bundle args,
+      @Nullable MediaController.ProgressListener progressListener) {
+    return sendCustomCommand(command, args);
+  }
+
+  @Override
   public Timeline getCurrentTimeline() {
     return controllerInfo.playerInfo.timeline;
   }
@@ -1097,6 +1105,16 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
   @Override
   public void setVolume(float volume) {
     Log.w(TAG, "Session doesn't support setting player volume");
+  }
+
+  @Override
+  public void mute() {
+    Log.w(TAG, "Session doesn't support muting the player");
+  }
+
+  @Override
+  public void unmute() {
+    Log.w(TAG, "Session doesn't support unmuting the player");
   }
 
   @Override
@@ -2165,7 +2183,9 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
     PlaybackParameters playbackParameters =
         LegacyConversions.convertToPlaybackParameters(newLegacyPlayerInfo.playbackStateCompat);
     AudioAttributes audioAttributes =
-        LegacyConversions.convertToAudioAttributes(newLegacyPlayerInfo.playbackInfoCompat);
+        newLegacyPlayerInfo.playbackInfoCompat == null
+            ? AudioAttributes.DEFAULT
+            : newLegacyPlayerInfo.playbackInfoCompat.getAudioAttributes();
     boolean playWhenReady =
         LegacyConversions.convertToPlayWhenReady(newLegacyPlayerInfo.playbackStateCompat);
     @Player.State int playbackState;
@@ -2430,6 +2450,7 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
             /* timelineChangeReason= */ PlayerInfo.TIMELINE_CHANGE_REASON_DEFAULT,
             /* playlistMetadata= */ playlistMetadata,
             /* volume= */ 1.0f,
+            /* unmuteVolume= */ 1.0f,
             /* audioAttributes= */ audioAttributes,
             /* cueGroup= */ CueGroup.EMPTY_TIME_ZERO,
             /* deviceInfo= */ deviceInfo,

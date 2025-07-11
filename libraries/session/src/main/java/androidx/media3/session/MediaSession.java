@@ -61,7 +61,6 @@ import androidx.media3.datasource.DataSourceBitmapLoader;
 import androidx.media3.session.MediaLibraryService.LibraryParams;
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession;
 import androidx.media3.session.legacy.MediaControllerCompat;
-import androidx.media3.session.legacy.MediaSessionCompat;
 import androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Longs;
@@ -623,9 +622,19 @@ public class MediaSession {
     }
 
     /**
-     * Returns if the controller has been granted {@code android.permission.MEDIA_CONTENT_CONTROL}
-     * or has an enabled notification listener so it can be trusted to accept connection and
-     * incoming command requests.
+     * Returns whether the controller is trusted by the user to control and access media.
+     *
+     * <p>One or more of the following must be true for the controller to be trusted:
+     *
+     * <ul>
+     *   <li>The controller is part of the current app and user (using {@link
+     *       android.os.Process#myUid()}.
+     *   <li>The controller is part of the Android system (using {@link
+     *       android.os.Process#SYSTEM_UID}.
+     *   <li>The controller has been granted {@code android.permission.MEDIA_CONTENT_CONTROL}.
+     *   <li>The controller has been granted {@code android.permission.STATUS_BAR_SERVICE}.
+     *   <li>The controller has an enabled notification listener.
+     * </ul>
      */
     @UnstableApi
     public boolean isTrusted() {
@@ -1373,10 +1382,6 @@ public class MediaSession {
     impl.sendError(sessionError);
   }
 
-  /* package */ final MediaSessionCompat getSessionCompat() {
-    return impl.getSessionCompat();
-  }
-
   /**
    * Returns the platform {@link android.media.session.MediaSession.Token} of the {@link
    * android.media.session.MediaSession} created internally by this session.
@@ -1384,8 +1389,7 @@ public class MediaSession {
   @SuppressWarnings("UnnecessarilyFullyQualified") // Avoiding clash with Media3 token.
   @UnstableApi
   public final android.media.session.MediaSession.Token getPlatformToken() {
-    return (android.media.session.MediaSession.Token)
-        impl.getSessionCompat().getSessionToken().getToken();
+    return impl.getPlatformToken();
   }
 
   /**
@@ -1441,6 +1445,29 @@ public class MediaSession {
   @VisibleForTesting
   /* package */ final Uri getUri() {
     return impl.getUri();
+  }
+
+  /**
+   * A progress reporter to report progress for a custom command sent by a controller.
+   *
+   * <p>A non-null instance is passed to {@link MediaSession.Callback#onCustomCommand(MediaSession,
+   * ControllerInfo, SessionCommand, Bundle, ProgressReporter)} in case the controller requests
+   * progress updates.
+   */
+  @UnstableApi
+  public interface ProgressReporter {
+
+    /**
+     * Sends a progress update to the controller that has sent a custom command.
+     *
+     * <p>Updates can be sent as long as the {@link ListenableFuture<SessionCommand>} returned by
+     * {@link Callback#onCustomCommand(MediaSession, ControllerInfo, SessionCommand, Bundle,
+     * ProgressReporter)} is not done. Sending updates after completion of the future results in a
+     * no-op.
+     *
+     * @param progressData The progress data {@link Bundle} to be sent to the controller.
+     */
+    void sendProgressUpdate(Bundle progressData);
   }
 
   /**
@@ -1577,6 +1604,13 @@ public class MediaSession {
      * Called when a controller sent a custom command through {@link
      * MediaController#sendCustomCommand(SessionCommand, Bundle)}.
      *
+     * <p>Note: By default {@link #onCustomCommand(MediaSession, ControllerInfo, SessionCommand,
+     * Bundle, ProgressReporter)} delegates all calls to this method and drops the option to send
+     * progress updates. If you want to implement progress updates you should override {@link
+     * #onCustomCommand(MediaSession, ControllerInfo, SessionCommand, Bundle, ProgressReporter)}
+     * instead to get access to the {@link ProgressReporter} in case a controller requests progress
+     * updates.
+     *
      * <p>{@link MediaController} instances are only allowed to send a command if the command has
      * been added to the {@link MediaSession.ConnectionResult#availableSessionCommands list of
      * available session commands} in {@link #onConnect} or set via {@link #setAvailableCommands}.
@@ -1604,6 +1638,53 @@ public class MediaSession {
         SessionCommand customCommand,
         Bundle args) {
       return Futures.immediateFuture(new SessionResult(ERROR_NOT_SUPPORTED));
+    }
+
+    /**
+     * Called when a controller sent a custom command through {@link
+     * MediaController#sendCustomCommand(SessionCommand, Bundle, MediaController.ProgressListener)}.
+     *
+     * <p>By default this callback delegates to {@link #onCustomCommand(MediaSession,
+     * ControllerInfo, SessionCommand, Bundle)}. If this method is overridden, the callback {@link
+     * #onCustomCommand(MediaSession, ControllerInfo, SessionCommand, Bundle)} is never called.
+     *
+     * <p>If a non-null {@link ProgressReporter} is passed in, then the session can report progress
+     * updates to the controller. It's the decision of the session whether or not to send progress
+     * updates. In any case, the transaction ends by completing the {@link ListenableFuture}
+     * returned by this method.
+     *
+     * <p>{@link MediaController} instances are only allowed to send a command if the command has
+     * been added to the {@link MediaSession.ConnectionResult#availableSessionCommands list of
+     * available session commands} in {@link #onConnect} or set via {@link #setAvailableCommands}.
+     *
+     * <p>Interoperability: This will be also called by {@code
+     * android.support.v4.media.MediaBrowserCompat.sendCustomAction()}. If so, {@code extras} from
+     * {@code android.support.v4.media.MediaBrowserCompat.sendCustomAction()} will be considered as
+     * {@code args} and the custom command will have {@code null} {@link
+     * SessionCommand#customExtras}.
+     *
+     * <p>Return a {@link ListenableFuture} to send a {@link SessionResult} back to the controller
+     * asynchronously. You can also return a {@link SessionResult} directly by using Guava's {@link
+     * Futures#immediateFuture(Object)}. Progress updates are dispatched only until the future has
+     * completed.
+     *
+     * @param session The session for this event.
+     * @param controller The {@linkplain ControllerInfo controller} information.
+     * @param customCommand The custom command.
+     * @param args A {@link Bundle} for additional arguments. May be empty.
+     * @param progressReporter A {@link ProgressReporter} to send progress update until the future
+     *     has completed. May be null if progress updates are not supported.
+     * @return The result of handling the custom command.
+     * @see SessionCommand#COMMAND_CODE_CUSTOM
+     */
+    @UnstableApi
+    default ListenableFuture<SessionResult> onCustomCommand(
+        MediaSession session,
+        ControllerInfo controller,
+        SessionCommand customCommand,
+        Bundle args,
+        @Nullable ProgressReporter progressReporter) {
+      return onCustomCommand(session, controller, customCommand, args);
     }
 
     /**
@@ -1751,6 +1832,17 @@ public class MediaSession {
     }
 
     /**
+     * @deprecated Override {@link MediaSession.Callback#onPlaybackResumption(MediaSession,
+     *     ControllerInfo, boolean)} instead.
+     */
+    @Deprecated
+    @UnstableApi
+    default ListenableFuture<MediaItemsWithStartPosition> onPlaybackResumption(
+        MediaSession mediaSession, ControllerInfo controller) {
+      return Futures.immediateFailedFuture(new UnsupportedOperationException());
+    }
+
+    /**
      * Returns the playlist with which the player should be prepared when a controller requests to
      * play without a current {@link MediaItem}.
      *
@@ -1758,14 +1850,28 @@ public class MediaSession {
      * href="https://developer.android.com/media/media3/session/background-playback#resumption">playback
      * resumption</a> is requested from a media button receiver or the System UI notification.
      *
-     * <p>Use {@link MediaMetadata#artworkData} or {@link MediaMetadata#artworkUri} with a content
-     * URI to set locally available artwork data for the System UI notification after reboot of the
-     * device. Note that network access may not be available when this method is called during boot
-     * time.
+     * <p>If {@code isForPlayback} is {@code false}, the controller only requests metadata about the
+     * item that will be played once playback resumption is requested without an immediate intention
+     * to start playback. For example, this may happen immediately after reboot of the device for
+     * System UI to populate its playback resumption notification. In these cases, only one {@link
+     * MediaItem} is needed and it's useful to provide additional metadata to allow System UI to
+     * generate the notification:
      *
-     * <p>Use {@link MediaConstants#EXTRAS_KEY_COMPLETION_STATUS} and {@link
-     * MediaConstants#EXTRAS_KEY_COMPLETION_PERCENTAGE} to statically indicate the completion
-     * status.
+     * <ul>
+     *   <li>Use {@link MediaMetadata#artworkData} or {@link MediaMetadata#artworkUri} with a
+     *       content URI to set locally available artwork data for the playback resumption
+     *       notification. Note that network access may not be available when this method is called
+     *       during boot time.
+     *   <li>Use {@link MediaConstants#EXTRAS_KEY_COMPLETION_STATUS} and {@link
+     *       MediaConstants#EXTRAS_KEY_COMPLETION_PERCENTAGE} to statically indicate the completion
+     *       status.
+     * </ul>
+     *
+     * <p>If {@code isForPlayback} is {@code true}, return the initial playlist for the {@link
+     * Player} and the intended start position. {@link Player#setMediaItem}, {@link
+     * Player#setMediaItems}, {@link Player#prepare} and {@link Player#play} will be called
+     * automatically as required. Any additional initial setup like setting playback speed, repeat
+     * mode or shuffle mode can be done from within this callback.
      *
      * <p>The method will only be called if the {@link Player} has {@link
      * Player#COMMAND_GET_CURRENT_MEDIA_ITEM} and either {@link Player#COMMAND_SET_MEDIA_ITEM} or
@@ -1775,12 +1881,17 @@ public class MediaSession {
      * @param controller The {@linkplain ControllerInfo controller} that requests the playback
      *     resumption. This may be a short living controller created only for issuing a play command
      *     for resuming playback.
+     * @param isForPlayback Whether playback is intended to start after this callback. If false, the
+     *     controller only requests metadata about the item that will be played once playback
+     *     resumption is requested. If true, playback will be started automatically with the
+     *     provided {@link MediaItemsWithStartPosition}.
      * @return The {@linkplain MediaItemsWithStartPosition playlist} to resume playback with.
      */
     @UnstableApi
+    @SuppressWarnings("deprecation") // calling deprecated API for backwards compatibility
     default ListenableFuture<MediaItemsWithStartPosition> onPlaybackResumption(
-        MediaSession mediaSession, ControllerInfo controller) {
-      return Futures.immediateFailedFuture(new UnsupportedOperationException());
+        MediaSession mediaSession, ControllerInfo controller, boolean isForPlayback) {
+      return onPlaybackResumption(mediaSession, controller);
     }
 
     /**
@@ -2167,6 +2278,9 @@ public class MediaSession {
 
     default void sendCustomCommand(int seq, SessionCommand command, Bundle args)
         throws RemoteException {}
+
+    default void sendCustomCommandProgressUpdate(
+        int seq, SessionCommand command, Bundle args, Bundle progressData) throws RemoteException {}
 
     default void onAvailableCommandsChangedFromSession(
         int seq, SessionCommands sessionCommands, Player.Commands playerCommands)

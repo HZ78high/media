@@ -43,7 +43,6 @@ import androidx.media3.common.GlTextureInfo;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
-import androidx.media3.common.VideoCompositorSettings;
 import androidx.media3.common.VideoGraph;
 import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.common.util.SystemClock;
@@ -52,7 +51,6 @@ import androidx.media3.datasource.AssetDataSource;
 import androidx.media3.datasource.DataSourceUtil;
 import androidx.media3.datasource.DataSpec;
 import androidx.media3.effect.DefaultVideoFrameProcessor;
-import androidx.media3.effect.GlEffect;
 import androidx.media3.effect.SingleInputVideoGraph;
 import androidx.media3.exoplayer.image.ExternallyLoadedImageDecoder;
 import androidx.media3.exoplayer.image.ExternallyLoadedImageDecoder.ExternalImageRequest;
@@ -66,10 +64,8 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.IOException;
-import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
@@ -311,142 +307,6 @@ public class CompositionPlayerTest {
   }
 
   @Test
-  public void imagePreview_twoImages() throws Exception {
-    PlayerTestListener listener = new PlayerTestListener(TEST_TIMEOUT_MS);
-    EditedMediaItem image =
-        new EditedMediaItem.Builder(
-                new MediaItem.Builder()
-                    .setUri(JPG_SINGLE_PIXEL_ASSET.uri)
-                    .setImageDurationMs(500)
-                    .build())
-            .build();
-
-    instrumentation.runOnMainSync(
-        () -> {
-          compositionPlayer = new CompositionPlayer.Builder(applicationContext).build();
-          // Set a surface on the player even though there is no UI on this test. We need a surface
-          // otherwise the player will skip/drop video frames.
-          compositionPlayer.setVideoSurfaceView(surfaceView);
-          compositionPlayer.addListener(listener);
-          compositionPlayer.setComposition(
-              new Composition.Builder(new EditedMediaItemSequence.Builder(image, image).build())
-                  .build());
-          compositionPlayer.prepare();
-          compositionPlayer.play();
-        });
-
-    listener.waitUntilPlayerEnded();
-  }
-
-  @Test
-  public void composition_imageThenVideo() throws Exception {
-    PlayerTestListener listener = new PlayerTestListener(TEST_TIMEOUT_MS);
-    EditedMediaItem image =
-        new EditedMediaItem.Builder(
-                new MediaItem.Builder()
-                    .setUri(JPG_SINGLE_PIXEL_ASSET.uri)
-                    .setImageDurationMs(500)
-                    .build())
-            .build();
-
-    EditedMediaItem video =
-        new EditedMediaItem.Builder(MediaItem.fromUri(MP4_ASSET.uri))
-            .setDurationUs(MP4_ASSET.videoDurationUs)
-            .build();
-
-    instrumentation.runOnMainSync(
-        () -> {
-          compositionPlayer = new CompositionPlayer.Builder(applicationContext).build();
-          // Set a surface on the player even though there is no UI on this test. We need a surface
-          // otherwise the player will skip/drop video frames.
-          compositionPlayer.setVideoSurfaceView(surfaceView);
-          compositionPlayer.addListener(listener);
-          compositionPlayer.setComposition(
-              new Composition.Builder(new EditedMediaItemSequence.Builder(image, video).build())
-                  .build());
-          compositionPlayer.prepare();
-          compositionPlayer.play();
-        });
-
-    listener.waitUntilPlayerEnded();
-  }
-
-  @Test
-  public void composition_videoThenImage() throws Exception {
-    PlayerTestListener listener = new PlayerTestListener(TEST_TIMEOUT_MS);
-    EditedMediaItem video =
-        new EditedMediaItem.Builder(MediaItem.fromUri(MP4_ASSET.uri))
-            .setDurationUs(MP4_ASSET.videoDurationUs)
-            .build();
-    EditedMediaItem image =
-        new EditedMediaItem.Builder(
-                new MediaItem.Builder()
-                    .setUri(JPG_SINGLE_PIXEL_ASSET.uri)
-                    .setImageDurationMs(500)
-                    .build())
-            .build();
-
-    instrumentation.runOnMainSync(
-        () -> {
-          compositionPlayer = new CompositionPlayer.Builder(applicationContext).build();
-          // Set a surface on the player even though there is no UI on this test. We need a surface
-          // otherwise the player will skip/drop video frames.
-          compositionPlayer.setVideoSurfaceView(surfaceView);
-          compositionPlayer.addListener(listener);
-          compositionPlayer.setComposition(
-              new Composition.Builder(new EditedMediaItemSequence.Builder(video, image).build())
-                  .build());
-          compositionPlayer.prepare();
-          compositionPlayer.play();
-        });
-
-    listener.waitUntilPlayerEnded();
-  }
-
-  @Test
-  public void composition_changeComposition() throws Exception {
-    PlayerTestListener listener = new PlayerTestListener(TEST_TIMEOUT_MS);
-    InputTimestampRecordingShaderProgram timestampRecordingShaderProgram =
-        new InputTimestampRecordingShaderProgram();
-    EditedMediaItem video =
-        new EditedMediaItem.Builder(MediaItem.fromUri(MP4_ASSET.uri))
-            .setDurationUs(MP4_ASSET.videoDurationUs)
-            .setEffects(
-                new Effects(
-                    ImmutableList.of(),
-                    ImmutableList.of(
-                        (GlEffect) (context, useHdr) -> timestampRecordingShaderProgram)))
-            .build();
-
-    instrumentation.runOnMainSync(
-        () -> {
-          compositionPlayer = new CompositionPlayer.Builder(applicationContext).build();
-          // Set a surface on the player even though there is no UI on this test. We need a surface
-          // otherwise the player will skip/drop video frames.
-          compositionPlayer.setVideoSurfaceView(surfaceView);
-          compositionPlayer.addListener(listener);
-          compositionPlayer.setComposition(
-              new Composition.Builder(new EditedMediaItemSequence.Builder(video).build()).build());
-          compositionPlayer.prepare();
-          compositionPlayer.play();
-        });
-    listener.waitUntilFirstFrameRendered();
-    instrumentation.runOnMainSync(
-        () ->
-            compositionPlayer.setComposition(
-                new Composition.Builder(new EditedMediaItemSequence.Builder(video).build())
-                    .build()));
-
-    listener.waitUntilPlayerEnded();
-    // Played two compositions so should render two frames of timestamp zero.
-    assertThat(
-            Iterables.filter(
-                timestampRecordingShaderProgram.getInputTimestampsUs(),
-                timestamp -> timestamp == 0))
-        .hasSize(2);
-  }
-
-  @Test
   public void videoPreview_withSpeedUp_playerEnds() throws Exception {
     PlayerTestListener listener = new PlayerTestListener(TEST_TIMEOUT_MS);
     Pair<AudioProcessor, Effect> effects =
@@ -585,8 +445,6 @@ public class CompositionPlayerTest {
                             DebugViewProvider debugViewProvider,
                             VideoGraph.Listener listener,
                             Executor listenerExecutor,
-                            VideoCompositorSettings videoCompositorSettings,
-                            List<Effect> compositionEffects,
                             long initialTimestampOffsetUs,
                             boolean renderFramesAutomatically) {
                           return new FailingReleaseVideoGraph(
@@ -595,7 +453,6 @@ public class CompositionPlayerTest {
                               debugViewProvider,
                               listener,
                               listenerExecutor,
-                              videoCompositorSettings,
                               renderFramesAutomatically);
                         }
 
@@ -641,17 +498,14 @@ public class CompositionPlayerTest {
         DebugViewProvider debugViewProvider,
         Listener listener,
         Executor listenerExecutor,
-        VideoCompositorSettings videoCompositorSettings,
         boolean renderFramesAutomatically) {
       super(
           context,
           new DefaultVideoFrameProcessor.Factory.Builder().build(),
           outputColorInfo,
           listener,
-          /* compositionEffects= */ ImmutableList.of(),
           debugViewProvider,
           listenerExecutor,
-          videoCompositorSettings,
           renderFramesAutomatically);
     }
 

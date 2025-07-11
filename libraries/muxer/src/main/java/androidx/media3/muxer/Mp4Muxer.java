@@ -41,7 +41,6 @@ import androidx.media3.container.Mp4OrientationData;
 import androidx.media3.container.Mp4TimestampData;
 import androidx.media3.container.XmpData;
 import com.google.common.collect.ImmutableList;
-import com.google.common.io.ByteStreams;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -112,36 +111,16 @@ import org.checkerframework.checker.nullness.qual.EnsuresNonNull;
 public final class Mp4Muxer implements Muxer {
   /** Parameters for {@link #FILE_FORMAT_MP4_WITH_AUXILIARY_TRACKS_EXTENSION}. */
   public static final class Mp4AtFileParameters {
-    /** Provides temporary cache files to be used by the muxer. */
-    public interface CacheFileProvider {
-
-      /**
-       * Returns a cache file path.
-       *
-       * <p>Every call to this method should return a new cache file.
-       *
-       * <p>The app is responsible for deleting the cache file after {@linkplain Mp4Muxer#close()
-       * closing} the muxer.
-       */
-      String getCacheFilePath();
-    }
-
     public final boolean shouldInterleaveSamples;
-    @Nullable public final CacheFileProvider cacheFileProvider;
 
     /**
      * Creates an instance.
      *
      * @param shouldInterleaveSamples Whether to interleave auxiliary track samples with primary
      *     track samples.
-     * @param cacheFileProvider A {@link CacheFileProvider}. Required only when {@code
-     *     shouldInterleaveSamples} is set to {@code false}, can be {@code null} otherwise.
      */
-    public Mp4AtFileParameters(
-        boolean shouldInterleaveSamples, @Nullable CacheFileProvider cacheFileProvider) {
-      checkArgument(shouldInterleaveSamples || cacheFileProvider != null);
+    public Mp4AtFileParameters(boolean shouldInterleaveSamples) {
       this.shouldInterleaveSamples = shouldInterleaveSamples;
-      this.cacheFileProvider = cacheFileProvider;
     }
   }
 
@@ -199,7 +178,7 @@ public final class Mp4Muxer implements Muxer {
 
   /** A builder for {@link Mp4Muxer} instances. */
   public static final class Builder {
-    private final FileOutputStream outputStream;
+    private final MuxerOutputFactory muxerOutputFactory;
 
     private @LastSampleDurationBehavior int lastSampleDurationBehavior;
     @Nullable private AnnexBToAvccConverter annexBToAvccConverter;
@@ -211,13 +190,33 @@ public final class Mp4Muxer implements Muxer {
     private int freeSpaceAfterFtypInBytes;
 
     /**
-     * Creates a {@link Builder} instance with default values.
-     *
-     * @param outputStream The {@link FileOutputStream} to write the media data to. This stream will
-     *     be automatically closed by the muxer when {@link Mp4Muxer#close()} is called.
+     * @deprecated Use {@link Mp4Muxer.Builder#Builder(MuxerOutputFactory)} instead.
      */
+    @Deprecated
     public Builder(FileOutputStream outputStream) {
-      this.outputStream = outputStream;
+      this(
+          new MuxerOutputFactory() {
+            @Override
+            public SeekableMuxerOutput getSeekableMuxerOutput() {
+              return SeekableMuxerOutput.of(outputStream);
+            }
+
+            @Override
+            public String getCacheFilePath() {
+              throw new UnsupportedOperationException(
+                  "Cache file is not supported with Muxer#Builder(FileOutputStream) builder, use"
+                      + " Muxer#Builder(MuxerOutputFactory) instead");
+            }
+          });
+    }
+
+    /**
+     * Creates an instance.
+     *
+     * @param muxerOutputFactory A {@link MuxerOutputFactory} to provide output destinations.
+     */
+    public Builder(MuxerOutputFactory muxerOutputFactory) {
+      this.muxerOutputFactory = muxerOutputFactory;
       lastSampleDurationBehavior =
           LAST_SAMPLE_DURATION_BEHAVIOR_SET_FROM_END_OF_STREAM_BUFFER_OR_DUPLICATE_PREVIOUS;
       attemptStreamableOutputEnabled = true;
@@ -356,7 +355,7 @@ public final class Mp4Muxer implements Muxer {
               : mp4AtFileParameters == null,
           "Mp4AtFileParameters must be set for FILE_FORMAT_MP4_WITH_AUXILIARY_TRACKS_EXTENSION");
       return new Mp4Muxer(
-          outputStream,
+          muxerOutputFactory,
           lastSampleDurationBehavior,
           annexBToAvccConverter == null ? AnnexBToAvccConverter.DEFAULT : annexBToAvccConverter,
           sampleCopyEnabled,
@@ -395,8 +394,8 @@ public final class Mp4Muxer implements Muxer {
 
   private static final String TAG = "Mp4Muxer";
 
-  private final FileOutputStream outputStream;
-  private final FileChannel outputChannel;
+  private final MuxerOutputFactory muxerOutputFactory;
+  private final SeekableMuxerOutput muxerOutput;
   private final @LastSampleDurationBehavior int lastSampleDurationBehavior;
   private final AnnexBToAvccConverter annexBToAvccConverter;
   private final boolean sampleCopyEnabled;
@@ -411,14 +410,14 @@ public final class Mp4Muxer implements Muxer {
   private final List<Track> auxiliaryTracks;
 
   @Nullable private String cacheFilePath;
-  @Nullable private FileOutputStream cacheFileOutputStream;
+  @Nullable private SeekableMuxerOutput cacheMuxerOutput;
   @Nullable private MetadataCollector auxiliaryTracksMetadataCollector;
   @Nullable private Mp4Writer auxiliaryTracksMp4Writer;
 
   private int nextTrackId;
 
   private Mp4Muxer(
-      FileOutputStream outputStream,
+      MuxerOutputFactory muxerOutputFactory,
       @LastSampleDurationBehavior int lastFrameDurationBehavior,
       AnnexBToAvccConverter annexBToAvccConverter,
       boolean sampleCopyEnabled,
@@ -427,8 +426,8 @@ public final class Mp4Muxer implements Muxer {
       @FileFormat int outputFileFormat,
       @Nullable Mp4AtFileParameters mp4AtFileParameters,
       int freeSpaceAfterFtypInBytes) {
-    this.outputStream = outputStream;
-    outputChannel = outputStream.getChannel();
+    this.muxerOutputFactory = muxerOutputFactory;
+    this.muxerOutput = muxerOutputFactory.getSeekableMuxerOutput();
     this.lastSampleDurationBehavior = lastFrameDurationBehavior;
     this.annexBToAvccConverter = annexBToAvccConverter;
     this.sampleCopyEnabled = sampleBatchingEnabled && sampleCopyEnabled;
@@ -440,7 +439,7 @@ public final class Mp4Muxer implements Muxer {
     metadataCollector = new MetadataCollector();
     mp4Writer =
         new Mp4Writer(
-            outputChannel,
+            muxerOutput,
             metadataCollector,
             annexBToAvccConverter,
             lastFrameDurationBehavior,
@@ -576,7 +575,7 @@ public final class Mp4Muxer implements Muxer {
       exception = new MuxerException("Failed to finish writing data", e);
     }
     try {
-      outputStream.close();
+      muxerOutput.close();
     } catch (IOException e) {
       if (exception == null) {
         exception = new MuxerException("Failed to close output stream", e);
@@ -584,9 +583,9 @@ public final class Mp4Muxer implements Muxer {
         Log.e(TAG, "Failed to close output stream", e);
       }
     }
-    if (cacheFileOutputStream != null) {
+    if (cacheMuxerOutput != null) {
       try {
-        cacheFileOutputStream.close();
+        cacheMuxerOutput.close();
       } catch (IOException e) {
         if (exception == null) {
           exception = new MuxerException("Failed to close the cache file output stream", e);
@@ -603,13 +602,12 @@ public final class Mp4Muxer implements Muxer {
   @EnsuresNonNull({"auxiliaryTracksMp4Writer"})
   private void ensureSetupForAuxiliaryTracks() throws FileNotFoundException {
     if (auxiliaryTracksMp4Writer == null) {
-      cacheFilePath =
-          checkNotNull(checkNotNull(mp4AtFileParameters).cacheFileProvider).getCacheFilePath();
-      cacheFileOutputStream = new FileOutputStream(cacheFilePath);
+      cacheFilePath = muxerOutputFactory.getCacheFilePath();
+      cacheMuxerOutput = SeekableMuxerOutput.of(cacheFilePath);
       auxiliaryTracksMetadataCollector = new MetadataCollector();
       auxiliaryTracksMp4Writer =
           new Mp4Writer(
-              cacheFileOutputStream.getChannel(),
+              cacheMuxerOutput,
               checkNotNull(auxiliaryTracksMetadataCollector),
               annexBToAvccConverter,
               lastSampleDurationBehavior,
@@ -637,19 +635,19 @@ public final class Mp4Muxer implements Muxer {
     // The exact offset is known after writing all the data in mp4Writer.
     MdtaMetadataEntry placeholderAuxiliaryTracksOffset = getAuxiliaryTracksOffsetMetadata(0L);
     if (auxiliaryTracksMp4Writer != null) {
-      long auxiliaryTracksDataSize = checkNotNull(cacheFileOutputStream).getChannel().size();
+      long auxiliaryTracksDataSize = checkNotNull(cacheMuxerOutput).getSize();
       long axteBoxSize = LARGE_SIZE_BOX_HEADER_SIZE + auxiliaryTracksDataSize;
       metadataCollector.addMetadata(getAuxiliaryTracksLengthMetadata(axteBoxSize));
       metadataCollector.addMetadata(placeholderAuxiliaryTracksOffset);
     }
     mp4Writer.finishWritingSamplesAndFinalizeMoovBox();
     if (auxiliaryTracksMp4Writer != null) {
-      long primaryVideoDataSize = outputChannel.size();
+      long primaryVideoDataSize = muxerOutput.getSize();
       metadataCollector.removeMdtaMetadataEntry(placeholderAuxiliaryTracksOffset);
       metadataCollector.addMetadata(getAuxiliaryTracksOffsetMetadata(primaryVideoDataSize));
       mp4Writer.finalizeMoovBox();
       checkState(
-          outputChannel.size() == primaryVideoDataSize,
+          muxerOutput.getSize() == primaryVideoDataSize,
           "The auxiliary tracks offset should remain the same");
     }
   }
@@ -659,10 +657,13 @@ public final class Mp4Muxer implements Muxer {
       // Auxiliary tracks were not added.
       return;
     }
-    outputChannel.position(outputChannel.size());
-    FileInputStream inputStream = new FileInputStream(checkNotNull(cacheFilePath));
-    outputChannel.write(getAxteBoxHeader(inputStream.getChannel().size()));
-    ByteStreams.copy(inputStream, outputStream);
-    inputStream.close();
+    muxerOutput.setPosition(muxerOutput.getSize());
+    try (FileInputStream cacheFileInputStream = new FileInputStream(checkNotNull(cacheFilePath))) {
+      FileChannel cacheFileChannel = cacheFileInputStream.getChannel();
+      long cacheFileSize = cacheFileChannel.size();
+      muxerOutput.write(getAxteBoxHeader(cacheFileSize));
+      // Copy data from the cache file to muxer output.
+      cacheFileChannel.transferTo(/* position= */ 0, cacheFileSize, muxerOutput);
+    }
   }
 }

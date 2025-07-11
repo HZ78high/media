@@ -26,7 +26,9 @@ import static androidx.media3.common.Player.COMMAND_SEEK_FORWARD;
 import static androidx.media3.common.Player.COMMAND_SET_SPEED_AND_PITCH;
 import static androidx.media3.common.Player.STATE_ENDED;
 import static androidx.media3.common.Player.STATE_READY;
+import static androidx.media3.test.session.common.MediaSessionConstants.KEY_IS_LEGACY_CONTROLLER;
 import static androidx.media3.test.session.common.MediaSessionConstants.NOTIFICATION_CONTROLLER_KEY;
+import static androidx.media3.test.session.common.MediaSessionConstants.TEST_CUSTOM_ACTION_WITH_PROGRESS_UPDATE;
 import static androidx.media3.test.session.common.MediaSessionConstants.TEST_MEDIA_CONTROLLER_COMPAT_CALLBACK_WITH_MEDIA_SESSION_TEST;
 import static androidx.media3.test.session.common.MediaSessionConstants.TEST_SET_SHOW_PLAY_BUTTON_IF_SUPPRESSED_TO_FALSE;
 import static androidx.media3.test.session.common.TestUtils.LONG_TIMEOUT_MS;
@@ -44,7 +46,9 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.RemoteException;
+import android.os.ResultReceiver;
 import android.support.v4.media.MediaDescriptionCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.RatingCompat;
@@ -72,6 +76,7 @@ import androidx.media3.test.session.common.PollingCheck;
 import androidx.media3.test.session.common.SurfaceActivity;
 import androidx.media3.test.session.common.TestHandler;
 import androidx.media3.test.session.common.TestUtils;
+import androidx.media3.test.utils.FakeTimeline;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.LargeTest;
@@ -92,6 +97,7 @@ import org.junit.runner.RunWith;
 /** Tests for {@link MediaControllerCompat.Callback} with {@link MediaSession}. */
 @RunWith(AndroidJUnit4.class)
 @LargeTest
+@SuppressWarnings("deprecation") // Tests behavior of deprecated MediaControllerCompat.Callback
 public class MediaControllerCompatCallbackWithMediaSessionTest {
 
   private static final String SESSION_ID =
@@ -113,6 +119,16 @@ public class MediaControllerCompatCallbackWithMediaSessionTest {
         MediaSessionProviderService.KEY_ENABLE_FAKE_MEDIA_NOTIFICATION_MANAGER_CONTROLLER, true);
     session = new RemoteMediaSession(SESSION_ID, context, tokenExtras);
     controllerCompat = new MediaControllerCompat(context, session.getCompatToken());
+    CountDownLatch sessionReady = new CountDownLatch(1);
+    controllerCompat.registerCallback(
+        new MediaControllerCompat.Callback() {
+          @Override
+          public void onSessionReady() {
+            sessionReady.countDown();
+          }
+        },
+        new Handler(Looper.getMainLooper()));
+    sessionReady.await(TIMEOUT_MS, MILLISECONDS);
   }
 
   @After
@@ -1401,6 +1417,49 @@ public class MediaControllerCompatCallbackWithMediaSessionTest {
   }
 
   @Test
+  public void playbackStateChange_forLiveStream_notifiesUnsetPositionSpeedAndNoSeekAction()
+      throws Exception {
+    AtomicReference<PlaybackStateCompat> playbackStateRef = new AtomicReference<>();
+    CountDownLatch latch = new CountDownLatch(1);
+    MediaControllerCompat.Callback callback =
+        new MediaControllerCompat.Callback() {
+          @Override
+          public void onPlaybackStateChanged(PlaybackStateCompat state) {
+            playbackStateRef.set(state);
+            latch.countDown();
+          }
+        };
+    controllerCompat.registerCallback(callback, handler);
+    session
+        .getMockPlayer()
+        .setTimeline(
+            new FakeTimeline(
+                new FakeTimeline.TimelineWindowDefinition.Builder().setLive(true).build()));
+    session.getMockPlayer().setCurrentPosition(5000);
+    session.getMockPlayer().setBufferedPosition(6000);
+
+    session.getMockPlayer().notifyPlaybackStateChanged(STATE_READY);
+
+    assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
+    PlaybackStateCompat parameterPlaybackStateCompat = playbackStateRef.get();
+    PlaybackStateCompat getterPlaybackStateCompat = controllerCompat.getPlaybackState();
+    assertThat(parameterPlaybackStateCompat.getPosition())
+        .isEqualTo(PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN);
+    assertThat(getterPlaybackStateCompat.getPosition())
+        .isEqualTo(PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN);
+    assertThat(parameterPlaybackStateCompat.getBufferedPosition())
+        .isEqualTo(PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN);
+    assertThat(getterPlaybackStateCompat.getBufferedPosition())
+        .isEqualTo(PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN);
+    assertThat(parameterPlaybackStateCompat.getPlaybackSpeed()).isEqualTo(0f);
+    assertThat(getterPlaybackStateCompat.getPlaybackSpeed()).isEqualTo(0f);
+    assertThat(parameterPlaybackStateCompat.getActions() & PlaybackStateCompat.ACTION_SEEK_TO)
+        .isEqualTo(0);
+    assertThat(getterPlaybackStateCompat.getActions() & PlaybackStateCompat.ACTION_SEEK_TO)
+        .isEqualTo(0);
+  }
+
+  @Test
   public void setCustomLayout_onPlaybackStateCompatChangedCalled() throws Exception {
     Bundle extras1 = new Bundle();
     extras1.putString("key", "value-1");
@@ -1461,6 +1520,69 @@ public class MediaControllerCompatCallbackWithMediaSessionTest {
     assertThat(action2.getExtras().getString("key")).isEqualTo("value-2");
     assertThat(action2.getIcon()).isEqualTo(2);
     assertThat(action2.getName().toString()).isEqualTo("command2");
+  }
+
+  @SuppressWarnings("deprecation") // Testing backwards compatibility.
+  @Test
+  public void sendCommand_receivesSuccess() throws Exception {
+    RemoteMediaSession remoteSession =
+        new RemoteMediaSession(
+            TEST_CUSTOM_ACTION_WITH_PROGRESS_UPDATE, context, /* tokenExtras= */ null);
+    MediaControllerCompat controller =
+        new MediaControllerCompat(context, remoteSession.getCompatToken());
+    AtomicReference<Bundle> resultDataRef = new AtomicReference<>();
+    AtomicInteger resultCodeRef = new AtomicInteger();
+    CountDownLatch latch = new CountDownLatch(/* count= */ 1);
+    ResultReceiver resultReceiver =
+        new ResultReceiver(handler) {
+          @Override
+          protected void onReceiveResult(int resultCode, Bundle resultData) {
+            resultCodeRef.set(resultCode);
+            resultDataRef.set(resultData);
+            latch.countDown();
+          }
+        };
+
+    controller.sendCommand(MediaConstants.CUSTOM_COMMAND_DOWNLOAD, Bundle.EMPTY, resultReceiver);
+
+    assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
+    assertThat(resultDataRef.get().getString("key")).isEqualTo("value");
+    assertThat(resultCodeRef.get()).isEqualTo(SessionResult.RESULT_SUCCESS);
+    remoteSession.release();
+  }
+
+  @SuppressWarnings("deprecation") // Testing backwards compatibility.
+  @Test
+  public void sendCustomAction_receiveMetadataTriggeredByCustomAction() throws Exception {
+    RemoteMediaSession remoteSession =
+        new RemoteMediaSession(
+            TEST_CUSTOM_ACTION_WITH_PROGRESS_UPDATE, context, /* tokenExtras= */ null);
+    MediaControllerCompat controller =
+        new MediaControllerCompat(context, remoteSession.getCompatToken());
+    AtomicReference<MediaMetadataCompat> mediaMetadataRef = new AtomicReference<>();
+    CountDownLatch latch = new CountDownLatch(/* count= */ 1);
+    controller.registerCallback(
+        new MediaControllerCompat.Callback() {
+          @Override
+          public void onMetadataChanged(MediaMetadataCompat metadata) {
+            // The test session triggers a metadata update to give us a chance to assert that the
+            // action arrived.
+            mediaMetadataRef.set(metadata);
+            latch.countDown();
+          }
+        },
+        handler);
+    Bundle extras = new Bundle();
+    extras.putBoolean(KEY_IS_LEGACY_CONTROLLER, true);
+
+    controller
+        .getTransportControls()
+        .sendCustomAction(MediaConstants.CUSTOM_COMMAND_DOWNLOAD, extras);
+
+    assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
+    assertThat(mediaMetadataRef.get().getString(MediaMetadataCompat.METADATA_KEY_TITLE))
+        .isEqualTo("a title");
+    remoteSession.release();
   }
 
   @Test
@@ -1919,6 +2041,44 @@ public class MediaControllerCompatCallbackWithMediaSessionTest {
   }
 
   @Test
+  public void onMediaMetadataChanged_forLiveStream_updatesLegacyMetadataWithNegativeDuration()
+      throws Exception {
+    session
+        .getMockPlayer()
+        .notifyAvailableCommandsChanged(
+            new Player.Commands.Builder()
+                .addAll(Player.COMMAND_GET_METADATA, Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                .build());
+    session
+        .getMockPlayer()
+        .setTimeline(
+            new FakeTimeline(
+                new FakeTimeline.TimelineWindowDefinition.Builder().setLive(true).build()));
+    session.getMockPlayer().setDuration(5000);
+    AtomicReference<MediaMetadataCompat> metadataRef = new AtomicReference<>();
+    CountDownLatch latchForMetadata = new CountDownLatch(1);
+    MediaControllerCompat.Callback callback =
+        new MediaControllerCompat.Callback() {
+          @Override
+          public void onMetadataChanged(MediaMetadataCompat metadata) {
+            metadataRef.set(metadata);
+            latchForMetadata.countDown();
+          }
+        };
+    controllerCompat.registerCallback(callback, handler);
+
+    session
+        .getMockPlayer()
+        .notifyMediaMetadataChanged(new MediaMetadata.Builder().setTitle("title").build());
+
+    assertThat(latchForMetadata.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
+    MediaMetadataCompat parameterMetadataCompat = metadataRef.get();
+    MediaMetadataCompat getterMetadataCompat = controllerCompat.getMetadata();
+    assertThat(parameterMetadataCompat.getLong(METADATA_KEY_DURATION)).isLessThan(0);
+    assertThat(getterMetadataCompat.getLong(METADATA_KEY_DURATION)).isLessThan(0);
+  }
+
+  @Test
   public void playlistChange() throws Exception {
     AtomicReference<List<QueueItem>> queueRef = new AtomicReference<>();
     CountDownLatch latch = new CountDownLatch(1);
@@ -1966,7 +2126,6 @@ public class MediaControllerCompatCallbackWithMediaSessionTest {
     int listSize = 5_000;
 
     session.getMockPlayer().createAndSetFakeTimeline(listSize);
-    session.getMockPlayer().notifyTimelineChanged(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED);
 
     assertThat(latch.await(LONG_TIMEOUT_MS, MILLISECONDS)).isTrue();
     List<QueueItem> queueFromParam = queueRef.get();

@@ -195,6 +195,12 @@ import java.util.Objects;
    */
   private static final long PLAYBACK_BUFFER_EMPTY_THRESHOLD_US = 500_000;
 
+  /**
+   * If the playback duration to the next media item is under this threshold then the reading period
+   * may advance.
+   */
+  private static final long DURATION_TO_ADVANCE_READING_THRESHOLD_US = 10 * C.MICROS_PER_SECOND;
+
   private final RendererHolder[] renderers;
   private final RendererCapabilities[] rendererCapabilities;
   private final boolean[] rendererReportedReady;
@@ -935,6 +941,9 @@ import java.util.Objects;
       if (state != Player.STATE_BUFFERING) {
         playbackMaybeBecameStuckAtMs = C.TIME_UNSET;
       }
+      if (state != Player.STATE_READY && playbackInfo.sleepingForOffload) {
+        playbackInfo = playbackInfo.copyWithSleepingForOffload(false);
+      }
       playbackInfo = playbackInfo.copyWithPlaybackState(state);
     }
   }
@@ -1109,6 +1118,9 @@ import java.util.Objects;
     if (!shouldPlayWhenReady()) {
       stopRenderers();
       updatePlaybackPositions();
+      if (playbackInfo.sleepingForOffload) {
+        playbackInfo = playbackInfo.copyWithSleepingForOffload(false);
+      }
       queue.reevaluateBuffer(rendererPositionUs);
     } else {
       if (playbackInfo.playbackState == Player.STATE_READY) {
@@ -1511,17 +1523,16 @@ import java.util.Objects;
         playbackInfo.playbackState == Player.STATE_READY
             ? READY_MAXIMUM_INTERVAL_MS
             : BUFFERING_MAXIMUM_INTERVAL_MS;
-    if (shouldPlayWhenReady()) {
-      for (RendererHolder rendererHolder : renderers) {
-        wakeUpTimeIntervalMs =
-            min(
-                wakeUpTimeIntervalMs,
-                Util.usToMs(
-                    rendererHolder.getMinDurationToProgressUs(
-                        rendererPositionUs, rendererPositionElapsedRealtimeUs)));
-      }
-
-      // Do not schedule next doSomeWork past the playing period transition point.
+    for (RendererHolder rendererHolder : renderers) {
+      wakeUpTimeIntervalMs =
+          min(
+              wakeUpTimeIntervalMs,
+              Util.usToMs(
+                  rendererHolder.getMinDurationToProgressUs(
+                      rendererPositionUs, rendererPositionElapsedRealtimeUs)));
+    }
+    // Do not schedule next doSomeWork past the playing period transition point.
+    if (playbackInfo.isPlaying()) {
       MediaPeriodHolder nextPlayingPeriodHolder =
           queue.getPlayingPeriod() != null ? queue.getPlayingPeriod().getNext() : null;
       if (nextPlayingPeriodHolder != null
@@ -1862,6 +1873,7 @@ import java.util.Objects;
       trackSelector.release();
       setState(Player.STATE_IDLE);
     } finally {
+      handler.removeCallbacksAndMessages(null);
       playbackLooperProvider.releaseLooper();
       processedCondition.open();
     }
@@ -2611,6 +2623,12 @@ import java.util.Objects;
       return;
     }
 
+    // Only start pre-warming if under the threshold to advance the reading period.
+    long durationToNextMediaPeriodUs = getDurationToMediaPeriodUs(prewarmingPeriodHolder.getNext());
+    if (durationToNextMediaPeriodUs > DURATION_TO_ADVANCE_READING_THRESHOLD_US) {
+      return;
+    }
+
     queue.advancePrewarmingPeriod();
     maybePrewarmRenderers();
   }
@@ -2687,6 +2705,12 @@ import java.util.Objects;
     if (!readingPeriodHolder.getNext().prepared
         && rendererPositionUs < readingPeriodHolder.getNext().getStartPositionRendererTime()) {
       // The successor is not prepared yet and playback hasn't reached the transition point.
+      return;
+    }
+
+    if (readingPeriodHolder.getNext().prepared
+        && getDurationToMediaPeriodUs(readingPeriodHolder.getNext())
+            > DURATION_TO_ADVANCE_READING_THRESHOLD_US) {
       return;
     }
 
@@ -3317,6 +3341,13 @@ import java.util.Objects;
     long totalBufferedDurationUs =
         bufferedPositionInLoadingPeriodUs - loadingPeriodHolder.toPeriodTime(rendererPositionUs);
     return max(0, totalBufferedDurationUs);
+  }
+
+  private long getDurationToMediaPeriodUs(MediaPeriodHolder mediaPeriodHolder) {
+    checkState(mediaPeriodHolder.prepared);
+    return (long)
+        ((mediaPeriodHolder.getStartPositionRendererTime() - rendererPositionUs)
+            / mediaClock.getPlaybackParameters().speed);
   }
 
   private void updateLoadControlTrackSelection(

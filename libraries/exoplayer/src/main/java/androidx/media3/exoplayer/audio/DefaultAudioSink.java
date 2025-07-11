@@ -608,6 +608,7 @@ public final class DefaultAudioSink implements AudioSink {
   private boolean playing;
   private boolean externalAudioSessionIdProvided;
   private int audioSessionId;
+  private boolean pendingAudioSessionIdChangeConfirmation;
   private AuxEffectInfo auxEffectInfo;
   @Nullable private AudioDeviceInfoApi23 preferredDevice;
   private boolean tunneling;
@@ -889,9 +890,6 @@ public final class DefaultAudioSink implements AudioSink {
     if (SDK_INT >= 31 && playerId != null) {
       Api31.setLogSessionIdOnAudioTrack(audioTrack, playerId);
     }
-    int newAudioSessionId = audioTrack.getAudioSessionId();
-    boolean audioSessionIdChanged = newAudioSessionId != audioSessionId;
-    audioSessionId = newAudioSessionId;
     audioTrackPositionTracker.setAudioTrack(
         audioTrack,
         /* isPassthrough= */ configuration.outputMode == OUTPUT_MODE_PASSTHROUGH,
@@ -917,9 +915,14 @@ public final class DefaultAudioSink implements AudioSink {
     }
     startMediaTimeUsNeedsInit = true;
 
+    int newAudioSessionId = audioTrack.getAudioSessionId();
+    boolean audioSessionIdChanged = newAudioSessionId != audioSessionId;
+    audioSessionId = newAudioSessionId;
+
     if (listener != null) {
       listener.onAudioTrackInitialized(configuration.buildAudioTrackConfig());
       if (audioSessionIdChanged) {
+        pendingAudioSessionIdChangeConfirmation = true;
         listener.onAudioSessionIdChanged(audioSessionId);
       }
     }
@@ -1483,13 +1486,17 @@ public final class DefaultAudioSink implements AudioSink {
 
   @Override
   public void setAudioSessionId(int audioSessionId) {
+    if (pendingAudioSessionIdChangeConfirmation) {
+      if (this.audioSessionId == audioSessionId) {
+        pendingAudioSessionIdChangeConfirmation = false;
+      } else {
+        return;
+      }
+    }
     if (this.audioSessionId != audioSessionId) {
       this.audioSessionId = audioSessionId;
       externalAudioSessionIdProvided = audioSessionId != C.AUDIO_SESSION_ID_UNSET;
       flush();
-      if (listener != null) {
-        listener.onAudioSessionIdChanged(audioSessionId);
-      }
     }
   }
 

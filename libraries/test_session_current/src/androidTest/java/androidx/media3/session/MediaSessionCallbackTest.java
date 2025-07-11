@@ -64,6 +64,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
@@ -453,7 +454,7 @@ public class MediaSessionCallbackTest {
   }
 
   @Test
-  public void onPostConnect_afterConnectionRejected() throws Exception {
+  public void onPostConnect_afterConnectionRejectedForTrustedApp() throws Exception {
     CountDownLatch latch = new CountDownLatch(1);
     MediaSession.Callback callback =
         new MediaSession.Callback() {
@@ -475,7 +476,7 @@ public class MediaSessionCallbackTest {
                 .setId("testOnPostConnect_afterConnectionRejected")
                 .build());
     remoteControllerTestRule.createRemoteController(session.getToken());
-    assertThat(latch.await(NO_RESPONSE_TIMEOUT_MS, MILLISECONDS)).isFalse();
+    assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
   }
 
   @Test
@@ -491,7 +492,6 @@ public class MediaSessionCallbackTest {
               return RESULT_INFO_SKIPPED;
             }
 
-            assertThat(controllerInfo.isTrusted()).isFalse();
             commands.add(command);
             if (command == Player.COMMAND_PREPARE) {
               return ERROR_INVALID_STATE;
@@ -1271,13 +1271,16 @@ public class MediaSessionCallbackTest {
   }
 
   @Test
-  public void onPlay_withEmptyTimeline_callsOnGetPlaybackResumptionPlaylist() throws Exception {
+  public void onPlay_withEmptyTimeline_callsOnGetPlaybackResumptionWithForPlaybackTrue()
+      throws Exception {
     List<MediaItem> mediaItems = MediaTestUtils.createMediaItems(/* size= */ 3);
+    AtomicBoolean isForPlaybackParameter = new AtomicBoolean();
     MediaSession.Callback callback =
         new MediaSession.Callback() {
           @Override
           public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
-              MediaSession mediaSession, ControllerInfo controller) {
+              MediaSession mediaSession, ControllerInfo controller, boolean isForPlayback) {
+            isForPlaybackParameter.set(isForPlayback);
             return Futures.immediateFuture(
                 new MediaSession.MediaItemsWithStartPosition(
                     mediaItems, /* startIndex= */ 1, /* startPositionMs= */ 123L));
@@ -1298,6 +1301,7 @@ public class MediaSessionCallbackTest {
     assertThat(player.startMediaItemIndex).isEqualTo(1);
     assertThat(player.startPositionMs).isEqualTo(123L);
     assertThat(player.mediaItems).isEqualTo(mediaItems);
+    assertThat(isForPlaybackParameter.get()).isTrue();
   }
 
   @Test
@@ -1359,7 +1363,7 @@ public class MediaSessionCallbackTest {
         new MediaSession.Callback() {
           @Override
           public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
-              MediaSession mediaSession, ControllerInfo controller) {
+              MediaSession mediaSession, ControllerInfo controller, boolean isForPlayback) {
             return Futures.immediateFuture(
                 new MediaSession.MediaItemsWithStartPosition(
                     mediaItems, /* startIndex= */ 1, /* startPositionMs= */ 123L));
@@ -1392,7 +1396,7 @@ public class MediaSessionCallbackTest {
         new MediaSession.Callback() {
           @Override
           public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
-              MediaSession mediaSession, ControllerInfo controller) {
+              MediaSession mediaSession, ControllerInfo controller, boolean isForPlayback) {
             return Futures.immediateFailedFuture(new UnsupportedOperationException());
           }
         };
@@ -1423,7 +1427,7 @@ public class MediaSessionCallbackTest {
         new MediaSession.Callback() {
           @Override
           public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
-              MediaSession mediaSession, ControllerInfo controller) {
+              MediaSession mediaSession, ControllerInfo controller, boolean isForPlayback) {
             fail();
             return Futures.immediateFuture(
                 new MediaSession.MediaItemsWithStartPosition(
@@ -1761,7 +1765,7 @@ public class MediaSessionCallbackTest {
         new MediaSession.Callback() {
           @Override
           public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
-              MediaSession mediaSession, ControllerInfo controller) {
+              MediaSession mediaSession, ControllerInfo controller, boolean isForPlayback) {
             return Futures.immediateFuture(
                 new MediaSession.MediaItemsWithStartPosition(
                     MediaTestUtils.createMediaItems(2),

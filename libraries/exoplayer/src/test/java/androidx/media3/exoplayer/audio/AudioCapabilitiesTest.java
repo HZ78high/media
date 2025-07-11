@@ -80,7 +80,7 @@ public class AudioCapabilitiesTest {
             (UiModeManager)
                 ApplicationProvider.getApplicationContext()
                     .getSystemService(Context.UI_MODE_SERVICE));
-    shadowUiModeManager.currentModeType = Configuration.UI_MODE_TYPE_TELEVISION;
+    shadowUiModeManager.setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
     int[] channelMasks =
         new int[] {
           AudioFormat.CHANNEL_OUT_MONO,
@@ -379,7 +379,7 @@ public class AudioCapabilitiesTest {
   public void
       getEncodingAndChannelConfigForPassthrough_forEAc3JocAndSingleSupportedConfig_returnsCorrectEncodingAndChannelConfig() {
     // Set UI mode to TV.
-    shadowOf(uiModeManager).currentModeType = Configuration.UI_MODE_TYPE_TELEVISION;
+    shadowOf(uiModeManager).setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
     Format format =
         new Format.Builder()
             .setSampleMimeType(MimeTypes.AUDIO_E_AC3_JOC)
@@ -414,7 +414,7 @@ public class AudioCapabilitiesTest {
   public void
       getEncodingAndChannelConfigForPassthrough_forDifferentAudioAttributes_returnsUnsupported() {
     // Set UI mode to TV.
-    shadowOf(uiModeManager).currentModeType = Configuration.UI_MODE_TYPE_TELEVISION;
+    shadowOf(uiModeManager).setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
     Format format =
         new Format.Builder()
             .setSampleMimeType(MimeTypes.AUDIO_E_AC3_JOC)
@@ -461,7 +461,7 @@ public class AudioCapabilitiesTest {
   private void setDefaultRoutedDevice(AudioAttributes audioAttributes, int type) {
     shadowOf(audioManager)
         .setAudioDevicesForAttributes(
-            audioAttributes.getAudioAttributesV21().audioAttributes,
+            audioAttributes.getPlatformAudioAttributes(),
             ImmutableList.of(AudioDeviceInfoBuilder.newBuilder().setType(type).build()));
   }
 
@@ -479,14 +479,14 @@ public class AudioCapabilitiesTest {
             .setSampleRate(48_000)
             .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
             .build(),
-        audioAttributes.getAudioAttributesV21().audioAttributes);
+        audioAttributes.getPlatformAudioAttributes());
     ShadowAudioTrack.addDirectPlaybackSupport(
         new AudioFormat.Builder()
             .setEncoding(encoding)
             .setSampleRate(48_000)
             .setChannelMask(channelMask)
             .build(),
-        audioAttributes.getAudioAttributesV21().audioAttributes);
+        audioAttributes.getPlatformAudioAttributes());
     AudioDeviceInfoBuilder deviceInfoBuilder =
         AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_HDMI);
     if (SDK_INT >= 33) {

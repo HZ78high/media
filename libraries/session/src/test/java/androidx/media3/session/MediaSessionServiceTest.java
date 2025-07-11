@@ -28,6 +28,7 @@ import android.os.HandlerThread;
 import android.service.notification.StatusBarNotification;
 import android.view.KeyEvent;
 import androidx.annotation.Nullable;
+import androidx.core.app.NotificationCompat;
 import androidx.media3.common.C;
 import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.MediaItem;
@@ -44,6 +45,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Before;
 import org.junit.Test;
@@ -857,6 +859,66 @@ public class MediaSessionServiceTest {
     serviceController.destroy();
   }
 
+  @Test
+  public void triggerNotificationUpdate_callsNotificationProvider() {
+    ExoPlayer player = new TestExoPlayerBuilder(context).build();
+    MediaSession session = new MediaSession.Builder(context, player).build();
+    ServiceController<TestService> serviceController = Robolectric.buildService(TestService.class);
+    TestService service = serviceController.create().get();
+    DefaultMediaNotificationProvider defaultProvider =
+        new DefaultMediaNotificationProvider(
+            service,
+            /* notificationIdProvider= */ unused -> 2000,
+            DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID,
+            DefaultMediaNotificationProvider.DEFAULT_CHANNEL_NAME_RESOURCE_ID);
+    AtomicInteger counter = new AtomicInteger();
+    service.setMediaNotificationProvider(
+        new MediaNotification.Provider() {
+          @Override
+          public MediaNotification createNotification(
+              MediaSession mediaSession,
+              ImmutableList<CommandButton> mediaButtonPreferences,
+              MediaNotification.ActionFactory actionFactory,
+              Callback onNotificationChangedCallback) {
+            MediaNotification notification =
+                defaultProvider.createNotification(
+                    mediaSession,
+                    mediaButtonPreferences,
+                    actionFactory,
+                    onNotificationChangedCallback);
+            return new MediaNotification(
+                notification.notificationId,
+                new NotificationCompat.Builder(service, notification.notification)
+                    .setTicker(Integer.toString(counter.incrementAndGet()))
+                    .build());
+          }
+
+          @Override
+          public boolean handleCustomCommand(MediaSession session, String action, Bundle extras) {
+            return defaultProvider.handleCustomCommand(session, action, extras);
+          }
+        });
+    service.addSession(session);
+    // Add media and give the service a chance to create an initial notification.
+    player.setMediaItem(MediaItem.fromUri("asset:///media/mp4/sample.mp4"));
+    player.prepare();
+    ShadowLooper.idleMainLooper();
+
+    String tickerBeforeTriggerNotificationUpdate =
+        getStatusBarNotification(2000).getNotification().tickerText.toString();
+    service.triggerNotificationUpdate();
+    ShadowLooper.idleMainLooper();
+    String tickerAfterTriggerNotificationUpdate =
+        getStatusBarNotification(2000).getNotification().tickerText.toString();
+
+    assertThat(tickerAfterTriggerNotificationUpdate)
+        .isNotEqualTo(tickerBeforeTriggerNotificationUpdate);
+
+    session.release();
+    player.release();
+    serviceController.destroy();
+  }
+
   @Nullable
   private StatusBarNotification getStatusBarNotification(int notificationId) {
     for (StatusBarNotification notification : notificationManager.getActiveNotifications()) {
@@ -911,7 +973,9 @@ public class MediaSessionServiceTest {
                     @Override
                     public ListenableFuture<MediaSession.MediaItemsWithStartPosition>
                         onPlaybackResumption(
-                            MediaSession mediaSession, MediaSession.ControllerInfo controller) {
+                            MediaSession mediaSession,
+                            MediaSession.ControllerInfo controller,
+                            boolean isForPlayback) {
                       // Automatic playback resumption is expected to be called only from the media
                       // notification controller. So we call it here only if the callback is
                       // actually called from the media notification controller (or a fake of it).

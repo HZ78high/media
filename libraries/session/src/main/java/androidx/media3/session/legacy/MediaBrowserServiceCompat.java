@@ -18,8 +18,6 @@ package androidx.media3.session.legacy;
 import static androidx.annotation.RestrictTo.Scope.LIBRARY;
 import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_ADD_SUBSCRIPTION;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_CONNECT;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_DISCONNECT;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_GET_MEDIA_ITEM;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_REGISTER_CALLBACK_MESSENGER;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_REMOVE_SUBSCRIPTION;
@@ -33,7 +31,6 @@ import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_CUSTOM_AC
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_CUSTOM_ACTION_EXTRAS;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_MEDIA_ITEM_ID;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_MEDIA_ITEM_LIST;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_MEDIA_SESSION_TOKEN;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_NOTIFY_CHILDREN_CHANGED_OPTIONS;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_OPTIONS;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_PACKAGE_NAME;
@@ -46,8 +43,6 @@ import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_CLIENT_V
 import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_MESSENGER_BINDER;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_SERVICE_VERSION;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_SESSION_BINDER;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_MSG_ON_CONNECT;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_MSG_ON_CONNECT_FAILED;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_MSG_ON_LOAD_CHILDREN;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_VERSION_CURRENT;
 import static androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo.LEGACY_CONTROLLER;
@@ -58,7 +53,6 @@ import android.annotation.SuppressLint;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.media.browse.MediaBrowser;
 import android.os.Binder;
 import android.os.Build;
@@ -83,6 +77,7 @@ import androidx.collection.ArrayMap;
 import androidx.core.util.Pair;
 import androidx.media3.common.util.NullableType;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.common.util.Util;
 import androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -93,7 +88,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import org.checkerframework.checker.nullness.qual.EnsuresNonNullIf;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 /**
@@ -128,6 +122,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 public abstract class MediaBrowserServiceCompat extends Service {
   static final String TAG = "MBServiceCompat";
   static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
+
+  private static final float EPSILON = 0.00001f;
 
   private @MonotonicNonNull MediaBrowserServiceImpl impl;
 
@@ -641,7 +637,6 @@ public abstract class MediaBrowserServiceCompat extends Service {
     public final HashMap<
             @NullableType String, List<Pair<@NullableType IBinder, @NullableType Bundle>>>
         subscriptions = new HashMap<>();
-    @Nullable public BrowserRoot root;
 
     ConnectionRecord(
         @Nullable String pkg,
@@ -693,6 +688,23 @@ public abstract class MediaBrowserServiceCompat extends Service {
 
     Result(@Nullable Object debug) {
       this.debug = debug;
+    }
+
+    /**
+     * Send an interim update to the caller. This method is supported only when it is used in {@link
+     * #onCustomAction}.
+     *
+     * @param extras A bundle that contains extra data.
+     */
+    public void sendProgressUpdate(@Nullable Bundle extras) {
+      if (sendResultCalled || sendErrorCalled) {
+        throw new IllegalStateException(
+            "sendProgressUpdate() called when either "
+                + "sendResult() or sendError() had already been called for: "
+                + debug);
+      }
+      checkExtraFields(extras);
+      onProgressUpdateSent(extras);
     }
 
     /** Send the result back to the caller. */
@@ -761,84 +773,46 @@ public abstract class MediaBrowserServiceCompat extends Service {
      */
     void onResultSent(@Nullable T result) {}
 
+    /** Called when an interim update is sent. */
+    void onProgressUpdateSent(@Nullable Bundle extras) {
+      throw new UnsupportedOperationException(
+          "It is not supported to send an interim update " + "for " + debug);
+    }
+
     /**
      * Called when an error is sent, after assertions about not being called twice have happened.
      */
     void onErrorSent(@Nullable Bundle extras) {
       throw new UnsupportedOperationException("It is not supported to send an error for " + debug);
     }
+
+    @SuppressWarnings("deprecation") // provides backwards compatibility
+    private void checkExtraFields(@Nullable Bundle extras) {
+      if (extras == null) {
+        return;
+      }
+      if (extras.containsKey(android.support.v4.media.MediaBrowserCompat.EXTRA_DOWNLOAD_PROGRESS)) {
+        float value =
+            extras.getFloat(android.support.v4.media.MediaBrowserCompat.EXTRA_DOWNLOAD_PROGRESS);
+        float constraintValue =
+            Util.constrainValue(value, /* min= */ -EPSILON, /* max= */ 1.0f + EPSILON);
+        if (value != constraintValue) {
+          extras.putFloat(
+              android.support.v4.media.MediaBrowserCompat.EXTRA_DOWNLOAD_PROGRESS, constraintValue);
+          Log.w(
+              TAG,
+              "The value of the EXTRA_DOWNLOAD_PROGRESS "
+                  + "field must be a float number within [0.0, 1.0]. Actual value clamped to "
+                  + constraintValue
+                  + " from "
+                  + value);
+        }
+      }
+    }
   }
 
   private class ServiceBinderImpl {
     ServiceBinderImpl() {}
-
-    public void connect(
-        @Nullable String pkg,
-        int pid,
-        int uid,
-        @Nullable Bundle rootHints,
-        ServiceCallbacks callbacks) {
-
-      if (!isValidPackage(pkg, uid)) {
-        throw new IllegalArgumentException("Package/uid mismatch: uid=" + uid + " package=" + pkg);
-      }
-
-      handler.postOrRun(
-          new Runnable() {
-            @Override
-            public void run() {
-              final IBinder b = callbacks.asBinder();
-
-              // Clear out the old subscriptions. We are getting new ones.
-              connections.remove(b);
-
-              ConnectionRecord connection =
-                  new ConnectionRecord(pkg, pid, uid, rootHints, callbacks);
-              curConnection = connection;
-              BrowserRoot root = MediaBrowserServiceCompat.this.onGetRoot(pkg, uid, rootHints);
-              connection.root = root;
-              curConnection = null;
-
-              // If they didn't return something, don't allow this client.
-              if (root == null) {
-                Log.i(TAG, "No root for client " + pkg + " from service " + getClass().getName());
-                try {
-                  callbacks.onConnectFailed();
-                } catch (RemoteException ex) {
-                  Log.w(TAG, "Calling onConnectFailed() failed. Ignoring. " + "pkg=" + pkg);
-                }
-              } else {
-                try {
-                  connections.put(b, connection);
-                  b.linkToDeath(connection, 0);
-                  if (session != null) {
-                    callbacks.onConnect(root.getRootId(), checkNotNull(session), root.getExtras());
-                  }
-                } catch (RemoteException ex) {
-                  Log.w(TAG, "Calling onConnect() failed. Dropping client. " + "pkg=" + pkg);
-                  connections.remove(b);
-                }
-              }
-            }
-          });
-    }
-
-    public void disconnect(ServiceCallbacks callbacks) {
-      handler.postOrRun(
-          new Runnable() {
-            @Override
-            public void run() {
-              final IBinder b = callbacks.asBinder();
-
-              // Clear out the old subscriptions. We are getting new ones.
-              final ConnectionRecord old = connections.remove(b);
-              if (old != null) {
-                // TODO
-                checkNotNull(old.callbacks).asBinder().unlinkToDeath(old, 0);
-              }
-            }
-          });
-    }
 
     public void addSubscription(
         @Nullable String id,
@@ -1032,11 +1006,6 @@ public abstract class MediaBrowserServiceCompat extends Service {
   private interface ServiceCallbacks {
     IBinder asBinder();
 
-    void onConnect(String root, MediaSessionCompat.Token session, @Nullable Bundle extras)
-        throws RemoteException;
-
-    void onConnectFailed() throws RemoteException;
-
     void onLoadChildren(
         @Nullable String mediaId,
         @Nullable List<MediaBrowserCompat.MediaItem> list,
@@ -1055,28 +1024,6 @@ public abstract class MediaBrowserServiceCompat extends Service {
     @Override
     public IBinder asBinder() {
       return callbacks.getBinder();
-    }
-
-    @Override
-    public void onConnect(String root, MediaSessionCompat.Token session, @Nullable Bundle extras)
-        throws RemoteException {
-      if (extras == null) {
-        extras = new Bundle();
-      }
-      extras.putInt(EXTRA_SERVICE_VERSION, SERVICE_VERSION_CURRENT);
-      Bundle data = new Bundle();
-      data.putString(DATA_MEDIA_ITEM_ID, root);
-      data.putParcelable(
-          DATA_MEDIA_SESSION_TOKEN,
-          LegacyParcelableUtil.convert(
-              session, android.support.v4.media.session.MediaSessionCompat.Token.CREATOR));
-      data.putBundle(DATA_ROOT_HINTS, extras);
-      sendRequest(SERVICE_MSG_ON_CONNECT, data);
-    }
-
-    @Override
-    public void onConnectFailed() throws RemoteException {
-      sendRequest(SERVICE_MSG_ON_CONNECT_FAILED, null);
     }
 
     @Override
@@ -1465,22 +1412,6 @@ public abstract class MediaBrowserServiceCompat extends Service {
   void handleMessageInternal(Message msg) {
     Bundle data = msg.getData();
     switch (msg.what) {
-      case CLIENT_MSG_CONNECT:
-        {
-          Bundle rootHints = data.getBundle(DATA_ROOT_HINTS);
-          MediaSessionCompat.ensureClassLoader(rootHints);
-
-          serviceBinderImpl.connect(
-              data.getString(DATA_PACKAGE_NAME),
-              data.getInt(DATA_CALLING_PID),
-              data.getInt(DATA_CALLING_UID),
-              rootHints,
-              new ServiceCallbacksCompat(msg.replyTo));
-          break;
-        }
-      case CLIENT_MSG_DISCONNECT:
-        serviceBinderImpl.disconnect(new ServiceCallbacksCompat(msg.replyTo));
-        break;
       case CLIENT_MSG_ADD_SUBSCRIPTION:
         {
           Bundle options = data.getBundle(DATA_OPTIONS);
@@ -1557,26 +1488,6 @@ public abstract class MediaBrowserServiceCompat extends Service {
     }
   }
 
-  /** Return whether the given package is one of the ones that is owned by the uid. */
-  @EnsuresNonNullIf(result = true, expression = "#1")
-  boolean isValidPackage(@Nullable String pkg, int uid) {
-    if (pkg == null) {
-      return false;
-    }
-    final PackageManager pm = getPackageManager();
-    final String[] packages = pm.getPackagesForUid(uid);
-    if (packages == null) {
-      return false;
-    }
-    final int N = packages.length;
-    for (int i = 0; i < N; i++) {
-      if (packages[i].equals(pkg)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /** Save the subscription and if it is a new subscription send the results. */
   void addSubscription(
       @Nullable String id,
@@ -1623,7 +1534,7 @@ public abstract class MediaBrowserServiceCompat extends Service {
             iter.remove();
           }
         }
-        if (callbackList.size() == 0) {
+        if (callbackList.isEmpty()) {
           connection.subscriptions.remove(id);
         }
       }
@@ -1797,6 +1708,11 @@ public abstract class MediaBrowserServiceCompat extends Service {
           @Override
           void onResultSent(@Nullable Bundle result) {
             receiver.send(RESULT_OK, result);
+          }
+
+          @Override
+          void onProgressUpdateSent(@Nullable Bundle data) {
+            receiver.send(RESULT_PROGRESS_UPDATE, data);
           }
 
           @Override

@@ -1558,7 +1558,8 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
     }
     if (timeBar != null) {
       timeBar.setPosition(position);
-      timeBar.setBufferedPosition(bufferedPosition);
+      // Hide the buffering bar in scrubbing mode.
+      timeBar.setBufferedPosition(isScrubbingModeEnabled(player) ? position : bufferedPosition);
     }
     if (progressUpdateListener != null) {
       progressUpdateListener.onProgressUpdate(position, bufferedPosition);
@@ -1899,6 +1900,34 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
     return a.getInt(R.styleable.PlayerControlView_repeat_toggle_modes, defaultValue);
   }
 
+  @EnsuresNonNullIf(result = true, expression = "#1")
+  private boolean isScrubbingModeEnabled(@Nullable Player player) {
+    try {
+      return (isExoPlayer(player)
+              && (boolean) checkNotNull(checkNotNull(isScrubbingModeEnabledMethod).invoke(player)))
+          || (isCompositionPlayer(player)
+              && (boolean)
+                  checkNotNull(
+                      checkNotNull(compositionPlayerIsScrubbingModeEnabledMethod).invoke(player)));
+    } catch (IllegalAccessException | InvocationTargetException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  @EnsuresNonNullIf(result = true, expression = "#1")
+  private boolean isExoPlayer(@Nullable Player player) {
+    return player != null
+        && exoplayerClazz != null
+        && exoplayerClazz.isAssignableFrom(player.getClass());
+  }
+
+  @EnsuresNonNullIf(result = true, expression = "#1")
+  private boolean isCompositionPlayer(@Nullable Player player) {
+    return player != null
+        && compositionPlayerClazz != null
+        && compositionPlayerClazz.isAssignableFrom(player.getClass());
+  }
+
   private final class ComponentListener
       implements Player.Listener,
           TimeBar.OnScrubListener,
@@ -1984,22 +2013,8 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
       if (positionView != null) {
         positionView.setText(Util.getStringForTime(formatBuilder, formatter, position));
       }
-      boolean isScrubbingModeEnabled;
-      try {
-        isScrubbingModeEnabled =
-            (isExoPlayer(player)
-                    && (boolean)
-                        checkNotNull(checkNotNull(isScrubbingModeEnabledMethod).invoke(player)))
-                || (isCompositionPlayer(player)
-                    && (boolean)
-                        checkNotNull(
-                            checkNotNull(compositionPlayerIsScrubbingModeEnabledMethod)
-                                .invoke(player)));
-      } catch (IllegalAccessException | InvocationTargetException e) {
-        throw new RuntimeException(e);
-      }
-      if (isScrubbingModeEnabled) {
-        seekToTimeBarPosition(checkNotNull(player), position);
+      if (isScrubbingModeEnabled(player)) {
+        seekToTimeBarPosition(player, position);
       }
     }
 
@@ -2025,20 +2040,6 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
         }
       }
       controlViewLayoutManager.resetHideCallbacks();
-    }
-
-    @EnsuresNonNullIf(result = true, expression = "#1")
-    private boolean isExoPlayer(@Nullable Player player) {
-      return player != null
-          && exoplayerClazz != null
-          && exoplayerClazz.isAssignableFrom(player.getClass());
-    }
-
-    @EnsuresNonNullIf(result = true, expression = "#1")
-    private boolean isCompositionPlayer(@Nullable Player player) {
-      return player != null
-          && compositionPlayerClazz != null
-          && compositionPlayerClazz.isAssignableFrom(player.getClass());
     }
 
     @Override

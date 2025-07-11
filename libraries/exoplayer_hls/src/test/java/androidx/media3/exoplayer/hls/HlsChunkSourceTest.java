@@ -600,7 +600,7 @@ public class HlsChunkSourceTest {
         /* allowEndOfStream= */ true,
         output);
 
-    assertThat(((HlsMediaChunk) output.chunk).shouldSpliceIn).isTrue();
+    assertThat(((HlsMediaChunk) output.chunk).shouldSpliceIn()).isTrue();
   }
 
   @Test
@@ -645,10 +645,10 @@ public class HlsChunkSourceTest {
     HlsMediaChunk secondChunk = (HlsMediaChunk) output.chunk;
 
     assertThat(firstChunk.playlistUrl).isEqualTo(PLAYLIST_URI);
-    assertThat(firstChunk.shouldSpliceIn).isFalse();
+    assertThat(firstChunk.shouldSpliceIn()).isFalse();
     assertThat(firstChunk.startTimeUs).isEqualTo(16_000_000);
     assertThat(secondChunk.playlistUrl).isEqualTo(PLAYLIST_URI_2);
-    assertThat(secondChunk.shouldSpliceIn).isFalse();
+    assertThat(secondChunk.shouldSpliceIn()).isFalse();
     assertThat(secondChunk.startTimeUs).isEqualTo(20_000_000);
   }
 
@@ -693,10 +693,10 @@ public class HlsChunkSourceTest {
     HlsMediaChunk secondChunk = (HlsMediaChunk) output.chunk;
 
     assertThat(firstChunk.playlistUrl).isEqualTo(PLAYLIST_URI);
-    assertThat(firstChunk.shouldSpliceIn).isFalse();
+    assertThat(firstChunk.shouldSpliceIn()).isFalse();
     assertThat(firstChunk.startTimeUs).isEqualTo(16_000_000);
     assertThat(secondChunk.playlistUrl).isEqualTo(PLAYLIST_URI_2);
-    assertThat(secondChunk.shouldSpliceIn).isTrue();
+    assertThat(secondChunk.shouldSpliceIn()).isTrue();
     assertThat(secondChunk.startTimeUs).isEqualTo(16_000_000);
   }
 
@@ -742,10 +742,10 @@ public class HlsChunkSourceTest {
     HlsMediaChunk secondChunk = (HlsMediaChunk) output.chunk;
 
     assertThat(firstChunk.playlistUrl).isEqualTo(PLAYLIST_URI);
-    assertThat(firstChunk.shouldSpliceIn).isFalse();
+    assertThat(firstChunk.shouldSpliceIn()).isFalse();
     assertThat(firstChunk.startTimeUs).isEqualTo(16_000_000);
     assertThat(secondChunk.playlistUrl).isEqualTo(PLAYLIST_URI);
-    assertThat(secondChunk.shouldSpliceIn).isFalse();
+    assertThat(secondChunk.shouldSpliceIn()).isFalse();
     assertThat(secondChunk.startTimeUs).isEqualTo(20_000_000);
   }
 
@@ -1043,7 +1043,8 @@ public class HlsChunkSourceTest {
             mock(DrmSessionEventListener.EventDispatcher.class),
             mock(LoadErrorHandlingPolicy.class),
             mock(MediaSourceEventListener.EventDispatcher.class),
-            /* metadataType= */ HlsMediaSource.METADATA_TYPE_ID3);
+            /* metadataType= */ HlsMediaSource.METADATA_TYPE_ID3,
+            /* downloadExecutor= */ null);
     mediaChunk.init(sampleStreamWrapper, ImmutableList.of());
     mediaChunk.load();
   }

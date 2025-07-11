@@ -1314,9 +1314,35 @@ public class UtilTest {
   }
 
   @Test
-  public void getStringForTime_withNegativeTime_setsNegativePrefix() {
-    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ -35000))
-        .isEqualTo("-00:35");
+  public void getStringForTime_withRangeOfValues() {
+    assertThat(getStringForTime(C.TIME_UNSET)).isEqualTo("00:00");
+    assertThat(getStringForTime(0)).isEqualTo("00:00");
+    assertThat(getStringForTime(413)).isEqualTo("00:00");
+    assertThat(getStringForTime(800)).isEqualTo("00:01");
+    assertThat(getStringForTime(10_000)).isEqualTo("00:10");
+    assertThat(getStringForTime(65_000)).isEqualTo("01:05");
+    assertThat(getStringForTime(3_661_000)).isEqualTo("1:01:01");
+    assertThat(getStringForTime(-4_000)).isEqualTo("-00:04");
+  }
+
+  @Test
+  public void getStringForTime_withFormatter_withRangeOfValues() {
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ C.TIME_UNSET))
+        .isEqualTo("00:00");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ 0))
+        .isEqualTo("00:00");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ 413))
+        .isEqualTo("00:00");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ 800))
+        .isEqualTo("00:01");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ 10_000))
+        .isEqualTo("00:10");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ 65_000))
+        .isEqualTo("01:05");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ 3_661_000))
+        .isEqualTo("1:01:01");
+    assertThat(getStringForTime(new StringBuilder(), new Formatter(), /* timeMs= */ -4_000))
+        .isEqualTo("-00:04");
   }
 
   @Test
@@ -1623,7 +1649,10 @@ public class UtilTest {
   }
 
   @Test
-  @Config(minSdk = 21) // Specifies the minimum SDK to enforce the test to run with all API levels.
+  @Config(
+      minSdk =
+          Config.OLDEST_SDK) // Specifies the minimum SDK to enforce the test to run with all API
+  // levels.
   public void contentEquals_sparseArraysWithEqualContent_returnsTrue() {
     SparseArray<Integer> sparseArray1 = new SparseArray<>();
     sparseArray1.put(1, 2);
@@ -1636,7 +1665,10 @@ public class UtilTest {
   }
 
   @Test
-  @Config(minSdk = 21) // Specifies the minimum SDK to enforce the test to run with all API levels.
+  @Config(
+      minSdk =
+          Config.OLDEST_SDK) // Specifies the minimum SDK to enforce the test to run with all API
+  // levels.
   public void contentEquals_sparseArraysWithDifferentContents_returnsFalse() {
     SparseArray<Integer> sparseArray1 = new SparseArray<>();
     sparseArray1.put(1, 2);
@@ -1652,7 +1684,10 @@ public class UtilTest {
   }
 
   @Test
-  @Config(minSdk = 21) // Specifies the minimum SDK to enforce the test to run with all API levels.
+  @Config(
+      minSdk =
+          Config.OLDEST_SDK) // Specifies the minimum SDK to enforce the test to run with all API
+  // levels.
   public void contentHashCode_sparseArraysWithEqualContent_returnsEqualContentHashCode() {
     SparseArray<Integer> sparseArray1 = new SparseArray<>();
     sparseArray1.put(1, 2);
@@ -1665,7 +1700,10 @@ public class UtilTest {
   }
 
   @Test
-  @Config(minSdk = 21) // Specifies the minimum SDK to enforce the test to run with all API levels.
+  @Config(
+      minSdk =
+          Config.OLDEST_SDK) // Specifies the minimum SDK to enforce the test to run with all API
+  // levels.
   public void contentHashCode_sparseArraysWithDifferentContent_returnsDifferentContentHashCode() {
     // In theory this is not guaranteed though, adding this test to ensure a sensible
     // contentHashCode implementation.

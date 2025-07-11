@@ -50,9 +50,9 @@ import static java.lang.Math.max;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import android.annotation.SuppressLint;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -60,7 +60,6 @@ import android.text.TextUtils;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.AdPlaybackState;
-import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.DeviceInfo;
 import androidx.media3.common.HeartRating;
@@ -78,7 +77,6 @@ import androidx.media3.common.Timeline.Period;
 import androidx.media3.common.Timeline.Window;
 import androidx.media3.common.util.Log;
 import androidx.media3.session.MediaLibraryService.LibraryParams;
-import androidx.media3.session.legacy.AudioAttributesCompat;
 import androidx.media3.session.legacy.MediaBrowserCompat;
 import androidx.media3.session.legacy.MediaBrowserServiceCompat.BrowserRoot;
 import androidx.media3.session.legacy.MediaControllerCompat;
@@ -95,6 +93,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
@@ -790,9 +789,9 @@ import java.util.concurrent.TimeoutException;
       // If the actual media duration is unknown, use the manually declared value if available.
       durationMs = metadata.durationMs;
     }
-    if (durationMs != C.TIME_UNSET) {
-      builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs);
-    }
+    // METADATA_KEY_DURATION expects any negative value if unknown.
+    builder.putLong(
+        MediaMetadataCompat.METADATA_KEY_DURATION, durationMs != C.TIME_UNSET ? durationMs : -1);
 
     @Nullable RatingCompat userRatingCompat = convertToRatingCompat(metadata.userRating);
     if (userRatingCompat != null) {
@@ -1538,71 +1537,28 @@ import java.util.concurrent.TimeoutException;
                   MediaConstants.EXTRAS_KEY_COMMAND_BUTTON_ICON_COMPAT,
                   /* defaultValue= */ CommandButton.ICON_UNDEFINED)
               : CommandButton.ICON_UNDEFINED;
-      CommandButton button =
+      CommandButton.Builder button =
           new CommandButton.Builder(icon, customAction.getIcon())
               .setSessionCommand(new SessionCommand(action, extras == null ? Bundle.EMPTY : extras))
               .setDisplayName(customAction.getName())
-              .setEnabled(true)
-              .build();
-      customLayout.add(button);
+              .setEnabled(true);
+      @Nullable
+      String iconUriString =
+          extras != null
+              ? extras.getString(MediaConstants.EXTRAS_KEY_COMMAND_BUTTON_ICON_URI_COMPAT)
+              : null;
+      if (iconUriString != null) {
+        Uri iconUri = Uri.parse(iconUriString);
+        @Nullable String scheme = iconUri.getScheme();
+        if (Objects.equals(scheme, ContentResolver.SCHEME_CONTENT)
+            || Objects.equals(scheme, ContentResolver.SCHEME_ANDROID_RESOURCE)) {
+          button.setIconUri(iconUri);
+        }
+      }
+      customLayout.add(button.build());
     }
     return CommandButton.getMediaButtonPreferencesFromCustomLayout(
         customLayout.build(), availablePlayerCommands, sessionExtras);
-  }
-
-  /** Converts {@link AudioAttributesCompat} into {@link AudioAttributes}. */
-  /*
-   * @AudioAttributesCompat.AttributeUsage and @C.AudioUsage both use the same constant values,
-   * defined by AudioAttributes in the platform.
-   */
-  @SuppressLint("WrongConstant")
-  public static AudioAttributes convertToAudioAttributes(
-      @Nullable AudioAttributesCompat audioAttributesCompat) {
-    if (audioAttributesCompat == null) {
-      return AudioAttributes.DEFAULT;
-    }
-    return new AudioAttributes.Builder()
-        .setContentType(audioAttributesCompat.getContentType())
-        .setFlags(audioAttributesCompat.getFlags())
-        .setUsage(audioAttributesCompat.getUsage())
-        .build();
-  }
-
-  /** Converts {@link MediaControllerCompat.PlaybackInfo} to {@link AudioAttributes}. */
-  public static AudioAttributes convertToAudioAttributes(
-      @Nullable MediaControllerCompat.PlaybackInfo playbackInfoCompat) {
-    if (playbackInfoCompat == null) {
-      return AudioAttributes.DEFAULT;
-    }
-    return convertToAudioAttributes(playbackInfoCompat.getAudioAttributes());
-  }
-
-  /** Converts {@link AudioAttributes} into {@link AudioAttributesCompat}. */
-  public static AudioAttributesCompat convertToAudioAttributesCompat(
-      AudioAttributes audioAttributes) {
-    return new AudioAttributesCompat.Builder()
-        .setContentType(audioAttributes.contentType)
-        .setFlags(audioAttributes.flags)
-        .setUsage(audioAttributes.usage)
-        .build();
-  }
-
-  /**
-   * Gets the legacy stream type from {@link AudioAttributes}.
-   *
-   * @param audioAttributes audio attributes
-   * @return int legacy stream type from {@link AudioManager}
-   */
-  public static int getLegacyStreamType(AudioAttributes audioAttributes) {
-    int legacyStreamType = convertToAudioAttributesCompat(audioAttributes).getLegacyStreamType();
-    if (legacyStreamType == AudioManager.USE_DEFAULT_STREAM_TYPE) {
-      // Usually, AudioAttributesCompat#getLegacyStreamType() does not return
-      // USE_DEFAULT_STREAM_TYPE unless the developer sets it with
-      // AudioAttributesCompat.Builder#setLegacyStreamType().
-      // But for safety, let's convert USE_DEFAULT_STREAM_TYPE to STREAM_MUSIC here.
-      return AudioManager.STREAM_MUSIC;
-    }
-    return legacyStreamType;
   }
 
   public static <T> T getFutureResult(Future<T> future, long timeoutMs)

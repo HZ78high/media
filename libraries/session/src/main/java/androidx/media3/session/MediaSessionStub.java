@@ -123,10 +123,10 @@ import java.util.concurrent.ExecutionException;
   private static final String TAG = "MediaSessionStub";
 
   /** The version of the IMediaSession interface. */
-  public static final int VERSION_INT = 4;
+  public static final int VERSION_INT = 6;
 
   /**
-   * Sequence number used when a controller method is triggered on the sesison side that wasn't
+   * Sequence number used when a controller method is triggered on the session side that wasn't
    * initiated by the controller itself.
    */
   public static final int UNKNOWN_SEQUENCE_NUMBER = Integer.MIN_VALUE;
@@ -152,9 +152,16 @@ import java.util.concurrent.ExecutionException;
   }
 
   private static void sendSessionResult(
-      ControllerInfo controller, int sequenceNumber, SessionResult result) {
+      MediaSessionImpl sessionImpl,
+      ControllerInfo controller,
+      int sequenceNumber,
+      SessionResult result) {
     try {
       checkStateNotNull(controller.getControllerCb()).onSessionResult(sequenceNumber, result);
+      // Make sure the session sends out a new PlayerInfo update in any case, even if the controller
+      // command we just handled didn't change anything. This is needed to end any masking states
+      // in the controllers waiting to acknowledge this command.
+      sessionImpl.triggerPlayerInfoUpdate();
     } catch (RemoteException e) {
       Log.w(TAG, "Failed to send result to controller " + controller, e);
     }
@@ -174,7 +181,7 @@ import java.util.concurrent.ExecutionException;
       }
       task.run(sessionImpl.getPlayerWrapper(), controller);
       sendSessionResult(
-          controller, sequenceNumber, new SessionResult(SessionResult.RESULT_SUCCESS));
+          sessionImpl, controller, sequenceNumber, new SessionResult(SessionResult.RESULT_SUCCESS));
       return Futures.immediateVoidFuture();
     };
   }
@@ -203,7 +210,7 @@ import java.util.concurrent.ExecutionException;
                             ? ERROR_NOT_SUPPORTED
                             : ERROR_UNKNOWN);
               }
-              sendSessionResult(controller, sequenceNumber, result);
+              sendSessionResult(sessionImpl, controller, sequenceNumber, result);
             });
   }
 
@@ -319,15 +326,16 @@ import java.util.concurrent.ExecutionException;
           sessionImpl.getApplicationHandler(),
           () -> {
             if (!connectedControllersManager.isPlayerCommandAvailable(controller, command)) {
-              sendSessionResult(
-                  controller, sequenceNumber, new SessionResult(ERROR_PERMISSION_DENIED));
+              SessionResult deniedResult = new SessionResult(ERROR_PERMISSION_DENIED);
+              sendSessionResult(sessionImpl, controller, sequenceNumber, deniedResult);
               return;
             }
             @SessionResult.Code
             int resultCode = sessionImpl.onPlayerCommandRequestOnHandler(controller, command);
             if (resultCode != SessionResult.RESULT_SUCCESS) {
               // Don't run rejected command.
-              sendSessionResult(controller, sequenceNumber, new SessionResult(resultCode));
+              sendSessionResult(
+                  sessionImpl, controller, sequenceNumber, new SessionResult(resultCode));
               return;
             }
             if (command == COMMAND_SET_VIDEO_SURFACE) {
@@ -396,14 +404,14 @@ import java.util.concurrent.ExecutionException;
             if (sessionCommand != null) {
               if (!connectedControllersManager.isSessionCommandAvailable(
                   controller, sessionCommand)) {
-                sendSessionResult(
-                    controller, sequenceNumber, new SessionResult(ERROR_PERMISSION_DENIED));
+                SessionResult deniedResult = new SessionResult(ERROR_PERMISSION_DENIED);
+                sendSessionResult(sessionImpl, controller, sequenceNumber, deniedResult);
                 return;
               }
             } else {
               if (!connectedControllersManager.isSessionCommandAvailable(controller, commandCode)) {
-                sendSessionResult(
-                    controller, sequenceNumber, new SessionResult(ERROR_PERMISSION_DENIED));
+                SessionResult deniedResult = new SessionResult(ERROR_PERMISSION_DENIED);
+                sendSessionResult(sessionImpl, controller, sequenceNumber, deniedResult);
                 return;
               }
             }
@@ -524,7 +532,7 @@ import java.util.concurrent.ExecutionException;
             PlayerWrapper playerWrapper = sessionImpl.getPlayerWrapper();
 
             Player.Commands controllerPlayerCommands;
-            PlayerInfo playerInfo = playerWrapper.createPlayerInfoForBundling();
+            PlayerInfo playerInfo = sessionImpl.getPlayerInfo();
             @Nullable
             PlaybackException sessionPlaybackException = sessionImpl.getPlaybackException();
             if (sessionPlaybackException == null) {
@@ -542,8 +550,7 @@ import java.util.concurrent.ExecutionException;
                           connectionResult.availablePlayerCommands));
             }
             playerInfo = generateAndCacheUniqueTrackGroupIds(playerInfo);
-            Token platformToken =
-                (Token) sessionImpl.getSessionCompat().getSessionToken().getToken();
+            Token platformToken = sessionImpl.getPlatformToken();
             ConnectionState state =
                 new ConnectionState(
                     MediaLibraryInfo.VERSION_INT,
@@ -648,15 +655,26 @@ import java.util.concurrent.ExecutionException;
     }
     int uid = Binder.getCallingUid();
     int callingPid = Binder.getCallingPid();
+    @Nullable MediaSessionImpl sessionImpl = this.sessionImpl.get();
+    if (sessionImpl != null
+        && !SessionUtil.isValidPackage(sessionImpl.getContext(), request.packageName, uid)) {
+      Log.w(
+          TAG,
+          "Ignoring connection from invalid package name "
+              + request.packageName
+              + " (uid="
+              + uid
+              + ")");
+      return;
+    }
+
     long token = Binder.clearCallingIdentity();
     // Binder.getCallingPid() can be 0 for an oneway call from the remote process.
     // If it's the case, use PID from the ConnectionRequest.
     int pid = (callingPid != 0) ? callingPid : request.pid;
     try {
-
       MediaSessionManager.RemoteUserInfo remoteUserInfo =
           new MediaSessionManager.RemoteUserInfo(request.packageName, pid, uid);
-      @Nullable MediaSessionImpl sessionImpl = this.sessionImpl.get();
       boolean isTrustedForMediaControl =
           sessionImpl != null
               && MediaSessionManager.getSessionManager(sessionImpl.getContext())
@@ -898,6 +916,17 @@ import java.util.concurrent.ExecutionException;
       int sequenceNumber,
       @Nullable Bundle commandBundle,
       @Nullable Bundle args) {
+    onCustomCommandWithProgressUpdate(
+        caller, sequenceNumber, commandBundle, args, /* progressUpdateRequested= */ false);
+  }
+
+  @Override
+  public void onCustomCommandWithProgressUpdate(
+      @Nullable IMediaController caller,
+      int sequenceNumber,
+      @Nullable Bundle commandBundle,
+      @Nullable Bundle args,
+      boolean progressUpdateRequested) {
     if (caller == null || commandBundle == null || args == null) {
       return;
     }
@@ -913,8 +942,19 @@ import java.util.concurrent.ExecutionException;
         sequenceNumber,
         command,
         sendSessionResultWhenReady(
-            (sessionImpl, controller, sequenceNum) ->
-                sessionImpl.onCustomCommandOnHandler(controller, command, args)));
+            (sessionImpl, controller, sequenceNum) -> {
+              ProgressReporter progressReporter = null;
+              if (progressUpdateRequested) {
+                progressReporter =
+                    new ProgressReporter(sessionImpl, controller, sequenceNum, command, args);
+              }
+              ListenableFuture<SessionResult> future =
+                  sessionImpl.onCustomCommandOnHandler(controller, progressReporter, command, args);
+              if (progressReporter != null) {
+                progressReporter.setFuture(future);
+              }
+              return future;
+            }));
   }
 
   @Override
@@ -1560,6 +1600,24 @@ import java.util.concurrent.ExecutionException;
         sendSessionResultSuccess(player -> player.setVolume(volume)));
   }
 
+  @Override
+  public void mute(@Nullable IMediaController caller, int sequenceNumber) {
+    if (caller == null) {
+      return;
+    }
+    queueSessionTaskWithPlayerCommand(
+        caller, sequenceNumber, COMMAND_SET_VOLUME, sendSessionResultSuccess(Player::mute));
+  }
+
+  @Override
+  public void unmute(@Nullable IMediaController caller, int sequenceNumber) {
+    if (caller == null) {
+      return;
+    }
+    queueSessionTaskWithPlayerCommand(
+        caller, sequenceNumber, COMMAND_SET_VOLUME, sendSessionResultSuccess(Player::unmute));
+  }
+
   @SuppressWarnings("deprecation") // Backwards compatibility a for flag-less method
   @Override
   public void setDeviceVolume(@Nullable IMediaController caller, int sequenceNumber, int volume) {
@@ -2154,6 +2212,12 @@ import java.util.concurrent.ExecutionException;
       iController.onCustomCommand(sequenceNumber, command.toBundle(), args);
     }
 
+    @Override
+    public void sendCustomCommandProgressUpdate(
+        int seq, SessionCommand command, Bundle args, Bundle progressData) throws RemoteException {
+      iController.onCustomCommandProgressUpdate(seq, command.toBundle(), args, progressData);
+    }
+
     @SuppressWarnings("nullness:argument") // params can be null.
     @Override
     public void onChildrenChanged(
@@ -2223,6 +2287,41 @@ import java.util.concurrent.ExecutionException;
       }
       Controller2Cb other = (Controller2Cb) obj;
       return Objects.equals(getCallbackBinder(), other.getCallbackBinder());
+    }
+  }
+
+  private static class ProgressReporter implements MediaSession.ProgressReporter {
+
+    private final MediaSessionImpl session;
+    private final ControllerInfo controller;
+    private final int customCommandFutureSequence;
+    private final SessionCommand command;
+    private final Bundle extras;
+    @Nullable private ListenableFuture<SessionResult> future;
+
+    public ProgressReporter(
+        MediaSessionImpl session,
+        ControllerInfo controller,
+        int customCommandFutureSequence,
+        SessionCommand command,
+        Bundle extras) {
+      this.session = session;
+      this.controller = controller;
+      this.customCommandFutureSequence = customCommandFutureSequence;
+      this.command = command;
+      this.extras = extras;
+    }
+
+    @Override
+    public void sendProgressUpdate(Bundle progressData) {
+      if ((future == null || !future.isDone()) && !session.isReleased()) {
+        session.sendCustomCommandProgressUpdate(
+            controller, customCommandFutureSequence, command, extras, progressData);
+      }
+    }
+
+    public void setFuture(ListenableFuture<SessionResult> future) {
+      this.future = future;
     }
   }
 }

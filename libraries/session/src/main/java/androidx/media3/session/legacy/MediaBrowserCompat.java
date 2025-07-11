@@ -31,7 +31,6 @@ import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_CUSTOM_AC
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_CUSTOM_ACTION_EXTRAS;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_MEDIA_ITEM_ID;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_MEDIA_ITEM_LIST;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_MEDIA_SESSION_TOKEN;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_NOTIFY_CHILDREN_CHANGED_OPTIONS;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_OPTIONS;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.DATA_PACKAGE_NAME;
@@ -44,8 +43,6 @@ import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_CLIENT_V
 import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_MESSENGER_BINDER;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_SERVICE_VERSION;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.EXTRA_SESSION_BINDER;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_MSG_ON_CONNECT;
-import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_MSG_ON_CONNECT_FAILED;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_MSG_ON_LOAD_CHILDREN;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_VERSION_2;
 
@@ -152,6 +149,16 @@ public final class MediaBrowserCompat {
    */
   public static final String CUSTOM_ACTION_REMOVE_DOWNLOADED_FILE =
       "android.support.v4.media.action.REMOVE_DOWNLOADED_FILE";
+
+  /**
+   * Used as a float extra field to denote the current progress during download. The value of this
+   * field must be a float number within [0.0, 1.0].
+   *
+   * @see #CUSTOM_ACTION_DOWNLOAD
+   * @see CustomActionCallback#onProgressUpdate
+   */
+  public static final String EXTRA_DOWNLOAD_PROGRESS =
+      "android.media.browse.extra.DOWNLOAD_PROGRESS";
 
   private final MediaBrowserImpl impl;
 
@@ -795,6 +802,16 @@ public final class MediaBrowserCompat {
   /** Callback for receiving the result of {@link #sendCustomAction}. */
   public abstract static class CustomActionCallback {
     /**
+     * Called when an interim update was delivered from the connected service while performing the
+     * custom action.
+     *
+     * @param action The custom action sent to the connected service.
+     * @param extras The bundle of service-specific arguments sent to the connected service.
+     * @param data The additional data delivered from the connected service.
+     */
+    public void onProgressUpdate(String action, Bundle extras, Bundle data) {}
+
+    /**
      * Called when the custom action finished successfully.
      *
      * @param action The custom action sent to the connected service.
@@ -844,14 +861,6 @@ public final class MediaBrowserCompat {
   }
 
   interface MediaBrowserServiceCallbackImpl {
-    void onServiceConnected(
-        Messenger callback,
-        @Nullable String root,
-        @Nullable MediaSessionCompat.Token session,
-        @Nullable Bundle extra);
-
-    void onConnectionFailed(Messenger callback);
-
     void onLoadChildren(
         Messenger callback,
         @Nullable String parentId,
@@ -991,7 +1000,7 @@ public final class MediaBrowserCompat {
               optionsList.remove(i);
             }
           }
-          if (callbacks.size() == 0) {
+          if (callbacks.isEmpty()) {
             browserFwk.unsubscribe(parentId);
           }
         }
@@ -1201,20 +1210,6 @@ public final class MediaBrowserCompat {
     }
 
     @Override
-    public void onServiceConnected(
-        final Messenger callback,
-        @Nullable final String root,
-        @Nullable final MediaSessionCompat.Token session,
-        @Nullable Bundle extra) {
-      // This method will not be called.
-    }
-
-    @Override
-    public void onConnectionFailed(Messenger callback) {
-      // This method will not be called.
-    }
-
-    @Override
     @SuppressWarnings({"ReferenceEquality"})
     public void onLoadChildren(
         Messenger callback,
@@ -1394,23 +1389,6 @@ public final class MediaBrowserCompat {
 
       try {
         switch (msg.what) {
-          case SERVICE_MSG_ON_CONNECT:
-            {
-              Bundle rootHints = data.getBundle(DATA_ROOT_HINTS);
-              MediaSessionCompat.ensureClassLoader(rootHints);
-
-              serviceCallback.onServiceConnected(
-                  callbacksMessenger,
-                  data.getString(DATA_MEDIA_ITEM_ID),
-                  LegacyParcelableUtil.convert(
-                      data.getParcelable(DATA_MEDIA_SESSION_TOKEN),
-                      MediaSessionCompat.Token.CREATOR),
-                  rootHints);
-              break;
-            }
-          case SERVICE_MSG_ON_CONNECT_FAILED:
-            serviceCallback.onConnectionFailed(callbacksMessenger);
-            break;
           case SERVICE_MSG_ON_LOAD_CHILDREN:
             {
               Bundle options = data.getBundle(DATA_OPTIONS);
@@ -1442,10 +1420,6 @@ public final class MediaBrowserCompat {
       } catch (BadParcelableException e) {
         // Do not print the exception here, since it is already done by the Parcel class.
         Log.e(TAG, "Could not unparcel the data.");
-        // If an error happened while connecting, disconnect from the service.
-        if (msg.what == SERVICE_MSG_ON_CONNECT) {
-          serviceCallback.onConnectionFailed(callbacksMessenger);
-        }
       }
     }
 
@@ -1642,7 +1616,10 @@ public final class MediaBrowserCompat {
       MediaSessionCompat.ensureClassLoader(resultData);
       switch (resultCode) {
         case MediaBrowserServiceCompat.RESULT_PROGRESS_UPDATE:
-          // Ignore, no implementation.
+          callback.onProgressUpdate(
+              action,
+              extras == null ? Bundle.EMPTY : extras,
+              resultData == null ? Bundle.EMPTY : resultData);
           break;
         case MediaBrowserServiceCompat.RESULT_OK:
           callback.onResult(action, extras, resultData);

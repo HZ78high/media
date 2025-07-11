@@ -33,6 +33,8 @@ oneway interface IMediaSession {
   // Id < 3000 is reserved to avoid potential collision with media2 1.x.
 
   void setVolume(IMediaController caller, int seq, float volume) = 3001;
+  void mute(IMediaController caller, int seq) = 3057;
+  void unmute(IMediaController caller, int seq) = 3058;
   void setDeviceVolume(IMediaController caller, int seq, int volume) = 3002;
   void setDeviceVolumeWithFlags(IMediaController caller, int seq, int volume, int flags) = 3050;
   void increaseDeviceVolume(IMediaController caller, int seq) = 3003;
@@ -76,6 +78,12 @@ oneway interface IMediaSession {
   void connect(IMediaController caller, int seq, in Bundle connectionRequest) = 3014;
   void onCustomCommand(
       IMediaController caller, int seq, in Bundle sessionCommand, in Bundle args) = 3015;
+  void onCustomCommandWithProgressUpdate(
+      IMediaController caller,
+      int seq,
+      in Bundle sessionCommand,
+      in Bundle args,
+      boolean progressUpdateRequested) = 3059;
   void setRepeatMode(IMediaController caller, int seq, int repeatMode) = 3016;
   void setShuffleModeEnabled(IMediaController caller, int seq, boolean shuffleModeEnabled) = 3017;
   void removeMediaItem(IMediaController caller, int seq, int index) = 3018;
@@ -122,7 +130,7 @@ oneway interface IMediaSession {
   void setRatingWithMediaId(
        IMediaController caller, int seq, String mediaId, in Bundle rating) = 3048;
   void setRating(IMediaController caller, int seq, in Bundle rating) = 3049;
-  // Next Id for MediaSession: 3057
+  // Next Id for MediaSession: 3060
 
   void getLibraryRoot(IMediaController caller, int seq, in Bundle libraryParams) = 4000;
   void getItem(IMediaController caller, int seq, String mediaId) = 4001;
