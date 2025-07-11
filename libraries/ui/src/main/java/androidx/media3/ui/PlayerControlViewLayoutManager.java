@@ -828,7 +828,7 @@ import java.util.List;
         Math.max(
             centerControlWidth,
             getWidthWithMargins(timeView) + getWidthWithMargins(overflowShowButton));
-    int defaultModeMinimumHeight = centerControlHeight + (2 * getHeightWithMargins(bottomBar));
+    int defaultModeMinimumHeight = centerControlHeight + getHeightWithMargins(bottomControllers) + getHeightWithMargins(topControllers);
 
     return width <= defaultModeMinimumWidth || height <= defaultModeMinimumHeight;
   }
