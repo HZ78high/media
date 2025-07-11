@@ -302,7 +302,7 @@ import org.checkerframework.checker.nullness.qual.EnsuresNonNullIf;
  * </ul>
  */
 @UnstableApi
-public class PlayerControlView extends FrameLayout {
+public class PlayerControlView extends FrameLayout implements PlayerController {
   // TODO: b/422411856 - Add tests for PlayerControlView.
 
   static {
