@@ -60,6 +60,9 @@ import static androidx.media3.session.SessionError.ERROR_PERMISSION_DENIED;
 import static androidx.media3.session.SessionError.ERROR_SESSION_DISCONNECTED;
 import static androidx.media3.session.SessionError.ERROR_UNKNOWN;
 import static androidx.media3.session.SessionError.INFO_CANCELLED;
+import static androidx.media3.session.SessionUtil.PACKAGE_INVALID;
+import static androidx.media3.session.SessionUtil.PACKAGE_VALID;
+import static androidx.media3.session.SessionUtil.checkPackageValidity;
 
 import android.app.PendingIntent;
 import android.media.session.MediaSession.Token;
@@ -467,16 +470,12 @@ import java.util.concurrent.ExecutionException;
   @SuppressWarnings("UngroupedOverloads") // Overload belongs to AIDL interface that is separated.
   public void connect(@Nullable IMediaController caller, @Nullable ControllerInfo controllerInfo) {
     if (caller == null || controllerInfo == null) {
+      SessionUtil.disconnectIMediaController(caller);
       return;
     }
     @Nullable MediaSessionImpl sessionImpl = this.sessionImpl.get();
     if (sessionImpl == null || sessionImpl.isReleased()) {
-      try {
-        caller.onDisconnected(/* seq= */ 0);
-      } catch (RemoteException e) {
-        // Controller may be died prematurely.
-        // Not an issue because we'll ignore it anyway.
-      }
+      SessionUtil.disconnectIMediaController(caller);
       return;
     }
     pendingControllers.add(controllerInfo);
@@ -596,12 +595,7 @@ import java.util.concurrent.ExecutionException;
             }
           } finally {
             if (!connected) {
-              try {
-                caller.onDisconnected(/* seq= */ 0);
-              } catch (RemoteException e) {
-                // Controller may be died prematurely.
-                // Not an issue because we'll ignore it anyway.
-              }
+              SessionUtil.disconnectIMediaController(caller);
             }
           }
         });
@@ -613,21 +607,13 @@ import java.util.concurrent.ExecutionException;
       connectedControllersManager.removeController(controller);
       ControllerCb cb = controller.getControllerCb();
       if (cb != null) {
-        try {
-          cb.onDisconnected(/* seq= */ 0);
-        } catch (RemoteException e) {
-          // Ignore. We're releasing.
-        }
+        cb.onDisconnected(/* seq= */ 0);
       }
     }
     for (ControllerInfo controller : pendingControllers) {
       ControllerCb cb = controller.getControllerCb();
       if (cb != null) {
-        try {
-          cb.onDisconnected(/* seq= */ 0);
-        } catch (RemoteException e) {
-          // Ignore. We're releasing.
-        }
+        cb.onDisconnected(/* seq= */ 0);
       }
     }
     pendingControllers.clear();
@@ -643,7 +629,9 @@ import java.util.concurrent.ExecutionException;
       @Nullable IMediaController caller,
       int sequenceNumber,
       @Nullable Bundle connectionRequestBundle) {
-    if (caller == null || connectionRequestBundle == null) {
+    @Nullable MediaSessionImpl sessionImpl = this.sessionImpl.get();
+    if (caller == null || connectionRequestBundle == null || sessionImpl == null) {
+      SessionUtil.disconnectIMediaController(caller);
       return;
     }
     ConnectionRequest request;
@@ -655,16 +643,14 @@ import java.util.concurrent.ExecutionException;
     }
     int uid = Binder.getCallingUid();
     int callingPid = Binder.getCallingPid();
-    @Nullable MediaSessionImpl sessionImpl = this.sessionImpl.get();
-    if (sessionImpl != null
-        && !SessionUtil.isValidPackage(sessionImpl.getContext(), request.packageName, uid)) {
+    @Nullable String packageName = request.packageName;
+    @SessionUtil.PackageValidationResult
+    int packageValidity = checkPackageValidity(sessionImpl.getContext(), packageName, uid);
+    if (packageValidity == PACKAGE_INVALID) {
       Log.w(
           TAG,
-          "Ignoring connection from invalid package name "
-              + request.packageName
-              + " (uid="
-              + uid
-              + ")");
+          "Ignoring connection from invalid package name " + packageName + " (uid=" + uid + ")");
+      SessionUtil.disconnectIMediaController(caller);
       return;
     }
 
@@ -674,11 +660,10 @@ import java.util.concurrent.ExecutionException;
     int pid = (callingPid != 0) ? callingPid : request.pid;
     try {
       MediaSessionManager.RemoteUserInfo remoteUserInfo =
-          new MediaSessionManager.RemoteUserInfo(request.packageName, pid, uid);
+          new MediaSessionManager.RemoteUserInfo(packageName, pid, uid);
       boolean isTrustedForMediaControl =
-          sessionImpl != null
-              && MediaSessionManager.getSessionManager(sessionImpl.getContext())
-                  .isTrustedForMediaControl(remoteUserInfo);
+          MediaSessionManager.getSessionManager(sessionImpl.getContext())
+              .isTrustedForMediaControl(remoteUserInfo);
       ControllerInfo controllerInfo =
           new ControllerInfo(
               remoteUserInfo,
@@ -687,7 +672,8 @@ import java.util.concurrent.ExecutionException;
               isTrustedForMediaControl,
               new MediaSessionStub.Controller2Cb(caller, request.controllerInterfaceVersion),
               request.connectionHints,
-              request.maxCommandsForMediaItems);
+              request.maxCommandsForMediaItems,
+              /* isPackageNameVerified= */ packageValidity == PACKAGE_VALID);
       connect(caller, controllerInfo);
     } finally {
       Binder.restoreCallingIdentity(token);
@@ -2237,8 +2223,8 @@ import java.util.concurrent.ExecutionException;
     }
 
     @Override
-    public void onDisconnected(int sequenceNumber) throws RemoteException {
-      iController.onDisconnected(sequenceNumber);
+    public void onDisconnected(int sequenceNumber) {
+      SessionUtil.disconnectIMediaController(iController);
     }
 
     @Override

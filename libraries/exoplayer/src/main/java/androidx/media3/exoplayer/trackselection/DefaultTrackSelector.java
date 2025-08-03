@@ -356,14 +356,22 @@ public class DefaultTrackSelector extends MappingTrackSelector
     @CanIgnoreReturnValue
     @Override
     public ParametersBuilder setPreferredVideoLanguage(@Nullable String preferredVideoLanguage) {
-      super.setPreferredVideoLanguage(preferredVideoLanguage);
+      delegate.setPreferredVideoLanguage(preferredVideoLanguage);
       return this;
     }
 
     @CanIgnoreReturnValue
     @Override
     public ParametersBuilder setPreferredVideoLanguages(String... preferredVideoLanguages) {
-      super.setPreferredVideoLanguages(preferredVideoLanguages);
+      delegate.setPreferredVideoLanguages(preferredVideoLanguages);
+      return this;
+    }
+
+    @SuppressWarnings("deprecation") // Intentionally returning deprecated type
+    @CanIgnoreReturnValue
+    @Override
+    public ParametersBuilder setPreferredVideoLabels(String... preferredVideoLabels) {
+      delegate.setPreferredVideoLabels(preferredVideoLabels);
       return this;
     }
 
@@ -524,6 +532,14 @@ public class DefaultTrackSelector extends MappingTrackSelector
     @SuppressWarnings("deprecation") // Intentionally returning deprecated type
     @CanIgnoreReturnValue
     @Override
+    public ParametersBuilder setPreferredAudioLabels(String... preferredAudioLabels) {
+      delegate.setPreferredAudioLabels(preferredAudioLabels);
+      return this;
+    }
+
+    @SuppressWarnings("deprecation") // Intentionally returning deprecated type
+    @CanIgnoreReturnValue
+    @Override
     public ParametersBuilder setAudioOffloadPreferences(
         AudioOffloadPreferences audioOffloadPreferences) {
       delegate.setAudioOffloadPreferences(audioOffloadPreferences);
@@ -531,6 +547,14 @@ public class DefaultTrackSelector extends MappingTrackSelector
     }
 
     // Text
+
+    @SuppressWarnings("deprecation") // Intentionally returning deprecated type
+    @CanIgnoreReturnValue
+    @Override
+    public ParametersBuilder setSelectTextByDefault(boolean selectTextByDefault) {
+      delegate.setSelectTextByDefault(selectTextByDefault);
+      return this;
+    }
 
     @SuppressWarnings("deprecation") // Intentionally returning deprecated type
     @CanIgnoreReturnValue
@@ -570,6 +594,14 @@ public class DefaultTrackSelector extends MappingTrackSelector
     @Override
     public ParametersBuilder setPreferredTextRoleFlags(@C.RoleFlags int preferredTextRoleFlags) {
       delegate.setPreferredTextRoleFlags(preferredTextRoleFlags);
+      return this;
+    }
+
+    @SuppressWarnings("deprecation") // Intentionally returning deprecated type
+    @CanIgnoreReturnValue
+    @Override
+    public ParametersBuilder setPreferredTextLabels(String... preferredTextLabels) {
+      delegate.setPreferredTextLabels(preferredTextLabels);
       return this;
     }
 
@@ -1197,6 +1229,13 @@ public class DefaultTrackSelector extends MappingTrackSelector
 
       @CanIgnoreReturnValue
       @Override
+      public Builder setPreferredVideoLabels(String... preferredVideoLabels) {
+        super.setPreferredVideoLabels(preferredVideoLabels);
+        return this;
+      }
+
+      @CanIgnoreReturnValue
+      @Override
       public Builder setPreferredVideoRoleFlags(@RoleFlags int preferredVideoRoleFlags) {
         super.setPreferredVideoRoleFlags(preferredVideoRoleFlags);
         return this;
@@ -1222,6 +1261,13 @@ public class DefaultTrackSelector extends MappingTrackSelector
       @Override
       public Builder setPreferredAudioRoleFlags(@C.RoleFlags int preferredAudioRoleFlags) {
         super.setPreferredAudioRoleFlags(preferredAudioRoleFlags);
+        return this;
+      }
+
+      @CanIgnoreReturnValue
+      @Override
+      public Builder setPreferredAudioLabels(String... preferredAudioLabels) {
+        super.setPreferredAudioLabels(preferredAudioLabels);
         return this;
       }
 
@@ -1391,6 +1437,13 @@ public class DefaultTrackSelector extends MappingTrackSelector
 
       @CanIgnoreReturnValue
       @Override
+      public Builder setSelectTextByDefault(boolean selectTextByDefault) {
+        super.setSelectTextByDefault(selectTextByDefault);
+        return this;
+      }
+
+      @CanIgnoreReturnValue
+      @Override
       public Builder setPreferredTextLanguageAndRoleFlagsToCaptioningManagerSettings() {
         super.setPreferredTextLanguageAndRoleFlagsToCaptioningManagerSettings();
         return this;
@@ -1431,6 +1484,13 @@ public class DefaultTrackSelector extends MappingTrackSelector
       @Override
       public Builder setIgnoredTextSelectionFlags(@C.SelectionFlags int ignoredTextSelectionFlags) {
         super.setIgnoredTextSelectionFlags(ignoredTextSelectionFlags);
+        return this;
+      }
+
+      @CanIgnoreReturnValue
+      @Override
+      public Builder setPreferredTextLabels(String... preferredTextLabels) {
+        super.setPreferredTextLabels(preferredTextLabels);
         return this;
       }
 
@@ -3460,6 +3520,17 @@ public class DefaultTrackSelector extends MappingTrackSelector
     return Integer.bitCount(trackRoleFlags & preferredRoleFlags);
   }
 
+  private static int getBestLabelMatchIndex(Format format, ImmutableList<String> preferredLabels) {
+    for (int i = 0; i < preferredLabels.size(); i++) {
+      for (int j = 0; j < format.labels.size(); j++) {
+        if (format.labels.get(j).value.equals(preferredLabels.get(i))) {
+          return i;
+        }
+      }
+    }
+    return Integer.MAX_VALUE;
+  }
+
   /**
    * Returns preference score for primary, hardware-accelerated video codecs, with higher score
    * being preferred.
@@ -3618,6 +3689,7 @@ public class DefaultTrackSelector extends MappingTrackSelector
     private final int preferredLanguageIndex;
     private final int preferredLanguageScore;
     private final int preferredRoleFlagsScore;
+    private final int preferredLabelMatchIndex;
     private final boolean hasMainOrNoRoleFlag;
     private final int selectedAudioLanguageScore;
     private final boolean allowMixedMimeTypes;
@@ -3700,6 +3772,7 @@ public class DefaultTrackSelector extends MappingTrackSelector
         }
       }
       preferredMimeTypeMatchIndex = bestMimeTypeMatchIndex;
+      preferredLabelMatchIndex = getBestLabelMatchIndex(format, parameters.preferredVideoLabels);
       usesPrimaryDecoder =
           RendererCapabilities.getDecoderSupport(formatSupport)
               == RendererCapabilities.DECODER_SUPPORT_PRIMARY;
@@ -3759,6 +3832,10 @@ public class DefaultTrackSelector extends MappingTrackSelector
                   Ordering.natural().reverse())
               .compare(info1.preferredLanguageScore, info2.preferredLanguageScore)
               .compare(info1.preferredRoleFlagsScore, info2.preferredRoleFlagsScore)
+              .compare(
+                  info1.preferredLabelMatchIndex,
+                  info2.preferredLabelMatchIndex,
+                  Ordering.natural().reverse())
               // 2. Compare match with implicit content preferences set by the media.
               .compareFalseFirst(info1.hasMainOrNoRoleFlag, info2.hasMainOrNoRoleFlag)
               .compare(info1.selectedAudioLanguageScore, info2.selectedAudioLanguageScore)
@@ -3858,6 +3935,7 @@ public class DefaultTrackSelector extends MappingTrackSelector
     private final int preferredLanguageScore;
     private final int preferredLanguageIndex;
     private final int preferredRoleFlagsScore;
+    private final int preferredLabelMatchIndex;
     private final boolean allowMixedMimeTypes;
     private final boolean hasMainOrNoRoleFlag;
     private final int localeLanguageMatchIndex;
@@ -3912,6 +3990,7 @@ public class DefaultTrackSelector extends MappingTrackSelector
       preferredLanguageScore = bestLanguageScore;
       preferredRoleFlagsScore =
           getRoleFlagMatchScore(format.roleFlags, parameters.preferredAudioRoleFlags);
+      preferredLabelMatchIndex = getBestLabelMatchIndex(format, parameters.preferredAudioLabels);
       hasMainOrNoRoleFlag = format.roleFlags == 0 || (format.roleFlags & C.ROLE_FLAG_MAIN) != 0;
       isDefaultSelectionFlag = (format.selectionFlags & C.SELECTION_FLAG_DEFAULT) != 0;
       isObjectBasedAudio = isObjectBasedAudio(format);
@@ -3998,6 +4077,10 @@ public class DefaultTrackSelector extends MappingTrackSelector
                   Ordering.natural().reverse())
               .compare(this.preferredLanguageScore, other.preferredLanguageScore)
               .compare(this.preferredRoleFlagsScore, other.preferredRoleFlagsScore)
+              .compare(
+                  this.preferredLabelMatchIndex,
+                  other.preferredLabelMatchIndex,
+                  Ordering.natural().reverse())
               // 2. Compare match with implicit content preferences set by the media or the system.
               .compareFalseFirst(this.isDefaultSelectionFlag, other.isDefaultSelectionFlag)
               .compareFalseFirst(this.hasMainOrNoRoleFlag, other.hasMainOrNoRoleFlag)
@@ -4096,6 +4179,7 @@ public class DefaultTrackSelector extends MappingTrackSelector
     private final int preferredLanguageIndex;
     private final int preferredLanguageScore;
     private final int preferredRoleFlagsScore;
+    private final int preferredLabelMatchIndex;
     private final int selectedAudioLanguageScore;
     private final boolean hasCaptionRoleFlags;
 
@@ -4142,6 +4226,7 @@ public class DefaultTrackSelector extends MappingTrackSelector
       preferredRoleFlagsScore = getRoleFlagMatchScore(format.roleFlags, preferredRoleFlags);
       hasCaptionRoleFlags =
           (format.roleFlags & (C.ROLE_FLAG_CAPTION | C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND)) != 0;
+      preferredLabelMatchIndex = getBestLabelMatchIndex(format, parameters.preferredTextLabels);
       boolean selectedAudioLanguageUndetermined =
           normalizeUndeterminedLanguageToNull(selectedAudioLanguage) == null;
       selectedAudioLanguageScore =
@@ -4149,8 +4234,11 @@ public class DefaultTrackSelector extends MappingTrackSelector
       boolean isWithinConstraints =
           preferredLanguageScore > 0
               || (parameters.preferredTextLanguages.isEmpty() && preferredRoleFlagsScore > 0)
+              || (parameters.preferredTextLanguages.isEmpty()
+                  && preferredLabelMatchIndex != Integer.MAX_VALUE)
               || isDefault
-              || (isForced && selectedAudioLanguageScore > 0);
+              || (isForced && selectedAudioLanguageScore > 0)
+              || parameters.selectTextByDefault;
       selectionEligibility =
           isFormatSupported(trackFormatSupport, parameters.exceedRendererCapabilitiesIfNecessary)
                   && isWithinConstraints
@@ -4181,6 +4269,10 @@ public class DefaultTrackSelector extends MappingTrackSelector
                   Ordering.natural().reverse())
               .compare(this.preferredLanguageScore, other.preferredLanguageScore)
               .compare(this.preferredRoleFlagsScore, other.preferredRoleFlagsScore)
+              .compare(
+                  this.preferredLabelMatchIndex,
+                  other.preferredLabelMatchIndex,
+                  Ordering.natural().reverse())
               // 2. Compare match with implicit content preferences set by the media.
               .compareFalseFirst(this.isDefault, other.isDefault)
               .compare(

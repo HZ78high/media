@@ -148,7 +148,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
   private ImmutableList<CommandButton> mediaButtonPreferences;
   private SessionCommands availableSessionCommands;
   private Player.Commands availablePlayerCommands;
-  @Nullable private PlaybackException playbackException;
+  @Nullable private PlaybackException customPlaybackException;
   @Nullable private Player.Commands playerCommandsForErrorState;
 
   @SuppressWarnings({
@@ -269,7 +269,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
    */
   public void setAvailableCommands(
       SessionCommands sessionCommands, Player.Commands playerCommands) {
-    if (playbackException != null) {
+    if (customPlaybackException != null) {
       return;
     }
     boolean commandGetTimelineChanged =
@@ -361,7 +361,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
   }
 
   /**
-   * Sets or clears an playback exception override for the platform session.
+   * Sets or clears a playback exception override for the platform session.
    *
    * @param playbackException The {@link PlaybackException} or null.
    * @param playerCommandsForErrorState The available {@link Player.Commands} while the exception
@@ -373,7 +373,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
     checkArgument(
         (playbackException == null && playerCommandsForErrorState == null)
             || (playbackException != null && playerCommandsForErrorState != null));
-    this.playbackException = playbackException;
+    customPlaybackException = playbackException;
     this.playerCommandsForErrorState = playerCommandsForErrorState;
     if (playbackException != null) {
       updateLegacySessionPlaybackState(sessionImpl.getPlayerWrapper());
@@ -546,7 +546,8 @@ import org.checkerframework.checker.initialization.qual.Initialized;
             /* trusted= */ false,
             /* cb= */ null,
             /* connectionHints= */ Bundle.EMPTY,
-            /* maxCommandsForMediaItems= */ 0),
+            /* maxCommandsForMediaItems= */ 0,
+            /* isPackageNameVerified= */ SDK_INT >= 33),
         intent);
   }
 
@@ -1009,14 +1010,11 @@ import org.checkerframework.checker.initialization.qual.Initialized;
               sessionManager.isTrustedForMediaControl(remoteUserInfo),
               controllerCb,
               /* connectionHints= */ Bundle.EMPTY,
-              /* maxCommandsForMediaItems= */ 0);
+              /* maxCommandsForMediaItems= */ 0,
+              /* isPackageNameVerified= */ SDK_INT >= 33);
       MediaSession.ConnectionResult connectionResult = sessionImpl.onConnectOnHandler(controller);
       if (!connectionResult.isAccepted) {
-        try {
-          controllerCb.onDisconnected(/* seq= */ 0);
-        } catch (RemoteException e) {
-          // Controller may have died prematurely.
-        }
+        controllerCb.onDisconnected(/* seq= */ 0);
         return null;
       }
       connectedControllersManager.addController(
@@ -1292,7 +1290,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
      * @return True if updates should be skipped.
      */
     public boolean skipLegacySessionPlaybackStateUpdates() {
-      return playbackException != null;
+      return customPlaybackException != null;
     }
 
     @Override
@@ -1306,7 +1304,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
     }
 
     @Override
-    public void onDisconnected(int seq) throws RemoteException {
+    public void onDisconnected(int seq) {
       // Calling MediaSessionCompat#release() is already done in release().
     }
 
@@ -1728,11 +1726,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
     public void handleMessage(Message msg) {
       ControllerInfo controller = (ControllerInfo) msg.obj;
       if (connectedControllersManager.isConnected(controller)) {
-        try {
-          checkStateNotNull(controller.getControllerCb()).onDisconnected(/* seq= */ 0);
-        } catch (RemoteException e) {
-          // Controller may have died prematurely.
-        }
+        checkStateNotNull(controller.getControllerCb()).onDisconnected(/* seq= */ 0);
         connectedControllersManager.removeController(controller);
       }
     }
@@ -1765,7 +1759,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
 
   private PlaybackStateCompat createPlaybackStateCompat(PlayerWrapper player) {
     LegacyError legacyError = this.legacyError;
-    if (playbackException == null && legacyError != null && legacyError.isFatal) {
+    if (customPlaybackException == null && legacyError != null && legacyError.isFatal) {
       // A fatal legacy error automatically set by Media3 upon a calling
       // MediaLibrarySession.Callback according to the configured LibraryErrorReplicationMode.
       Bundle extras = new Bundle(legacyError.extras);
@@ -1783,17 +1777,17 @@ import org.checkerframework.checker.initialization.qual.Initialized;
           .setExtras(legacyError.extras)
           .build();
     }
-    if (playbackException == null) {
-      // The actual error from the player, if any.
-      playbackException = player.getPlayerError();
-    }
+    // The custom error from the session if present, or the actual error from the player, if any.
+    @Nullable
+    PlaybackException publicPlaybackException =
+        customPlaybackException != null ? customPlaybackException : player.getPlayerError();
     boolean canReadPositions =
         player.isCommandAvailable(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
             && !player.isCurrentMediaItemLive();
     boolean shouldShowPlayButton =
-        playbackException != null || Util.shouldShowPlayButton(player, playIfSuppressed);
+        publicPlaybackException != null || Util.shouldShowPlayButton(player, playIfSuppressed);
     int state =
-        playbackException != null
+        publicPlaybackException != null
             ? PlaybackStateCompat.STATE_ERROR
             : LegacyConversions.convertToPlaybackStateCompatState(player, shouldShowPlayButton);
     // Always advertise ACTION_SET_RATING.
@@ -1824,8 +1818,9 @@ import org.checkerframework.checker.initialization.qual.Initialized;
             : MediaSessionCompat.QueueItem.UNKNOWN_ID;
     float playbackSpeed = player.getPlaybackParameters().speed;
     float sessionPlaybackSpeed = player.isPlaying() && canReadPositions ? playbackSpeed : 0f;
-    Bundle extras = playbackException != null ? new Bundle(playbackException.extras) : new Bundle();
-    if (playbackException == null && legacyError != null) {
+    Bundle extras =
+        publicPlaybackException != null ? new Bundle(publicPlaybackException.extras) : new Bundle();
+    if (publicPlaybackException == null && legacyError != null) {
       extras.putAll(legacyError.extras);
     }
     extras.putAll(legacyExtras);
@@ -1879,10 +1874,10 @@ import org.checkerframework.checker.initialization.qual.Initialized;
                 .build());
       }
     }
-    if (playbackException != null) {
+    if (publicPlaybackException != null) {
       builder.setErrorMessage(
-          LegacyConversions.convertToLegacyErrorCode(playbackException),
-          playbackException.getMessage());
+          LegacyConversions.convertToLegacyErrorCode(publicPlaybackException),
+          publicPlaybackException.getMessage());
     } else if (legacyError != null) {
       builder.setErrorMessage(legacyError.code, legacyError.message);
     }

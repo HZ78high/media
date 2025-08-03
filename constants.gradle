@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 project.ext {
-    releaseVersion = '1.8.0-rc01'
-    releaseVersionCode = 1_008_000_2_01
-    minSdkVersion = 21
+    releaseVersion = '1.8.0'
+    releaseVersionCode = 1_008_000_3_00
+    minSdkVersion = 23
     // See https://developer.android.com/training/cars/media/automotive-os#automotive-module
     automotiveMinSdkVersion = 28
     appTargetSdkVersion = 34

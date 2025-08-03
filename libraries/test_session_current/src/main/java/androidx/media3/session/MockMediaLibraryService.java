@@ -15,7 +15,6 @@
  */
 package androidx.media3.session;
 
-import static android.os.Build.VERSION.SDK_INT;
 import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.session.MediaConstants.CUSTOM_COMMAND_DOWNLOAD;
 import static androidx.media3.session.MediaConstants.EXTRAS_KEY_COMPLETION_STATUS;
@@ -23,7 +22,7 @@ import static androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION
 import static androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_LABEL_COMPAT;
 import static androidx.media3.session.MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_PARTIALLY_PLAYED;
 import static androidx.media3.session.MediaConstants.EXTRA_KEY_ROOT_CHILDREN_BROWSABLE_ONLY;
-import static androidx.media3.session.MediaLibraryService.MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_FATAL;
+import static androidx.media3.session.MediaLibraryService.MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_NON_FATAL;
 import static androidx.media3.session.SessionError.ERROR_BAD_VALUE;
 import static androidx.media3.session.SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED;
 import static androidx.media3.session.SessionError.ERROR_SESSION_SKIP_LIMIT_REACHED;
@@ -226,7 +225,7 @@ public class MockMediaLibraryService extends MediaLibraryService {
               .getConnectionHints()
               .getInt(
                   CONNECTION_HINTS_KEY_LIBRARY_ERROR_REPLICATION_MODE,
-                  LIBRARY_ERROR_REPLICATION_MODE_FATAL);
+                  LIBRARY_ERROR_REPLICATION_MODE_NON_FATAL);
       Bundle playlistAddExtras = new Bundle();
       playlistAddExtras.putString("key-1", "playlist_add");
       Bundle radioExtras = new Bundle();
@@ -423,7 +422,7 @@ public class MockMediaLibraryService extends MediaLibraryService {
           || Objects.equals(parentId, PARENT_ID_SKIP_LIMIT_REACHED_ERROR)) {
         Bundle bundle = new Bundle();
         Intent signInIntent = new Intent("action");
-        int flags = SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
+        int flags = PendingIntent.FLAG_IMMUTABLE;
         bundle.putParcelable(
             EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT,
             PendingIntent.getActivity(
@@ -449,7 +448,7 @@ public class MockMediaLibraryService extends MediaLibraryService {
       } else if (Objects.equals(parentId, PARENT_ID_AUTH_EXPIRED_ERROR_NON_FATAL)) {
         Bundle bundle = new Bundle();
         Intent signInIntent = new Intent("action");
-        int flags = SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
+        int flags = PendingIntent.FLAG_IMMUTABLE;
         bundle.putParcelable(
             EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT,
             PendingIntent.getActivity(

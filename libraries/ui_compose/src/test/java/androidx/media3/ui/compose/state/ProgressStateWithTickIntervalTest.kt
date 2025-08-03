@@ -16,24 +16,21 @@
 
 package androidx.media3.ui.compose.state
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import androidx.media3.common.Player.COMMAND_GET_CURRENT_MEDIA_ITEM
 import androidx.media3.common.SimpleBasePlayer.MediaItemData
 import androidx.media3.ui.compose.utils.TestPlayer
+import androidx.media3.ui.compose.utils.advanceTimeByInclusive
+import androidx.media3.ui.compose.utils.rememberCoroutineScopeWithBackgroundCancellation
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.collect.ImmutableList
 import com.google.common.truth.Truth.assertThat
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -368,31 +365,72 @@ class ProgressStateWithTickIntervalTest {
       assertThat(player.bufferedPosition).isEqualTo(123)
       assertThat(state.bufferedPositionMs).isEqualTo(0)
 
-      advanceTimeByInclusive((PAUSED_UPDATE_INTERVAL_MS - 500).milliseconds)
+      advanceTimeByInclusive((FALLBACK_UPDATE_INTERVAL_MS - 500).milliseconds)
 
       assertThat(player.bufferedPosition).isEqualTo(123)
       assertThat(state.bufferedPositionMs).isEqualTo(100)
     }
 
-  /**
-   * Moves the virtual clock of this dispatcher forward by [the specified amount][delayTime],
-   * running the scheduled tasks in the meantime.
-   *
-   * Compared to a single [kotlinx.coroutines.test.advanceTimeBy], it does run the tasks that are
-   * scheduled at exactly currentTime + [delayTime]. There is often a need for another run of the
-   * scheduled tasks because they contain exactly the update needed for a correct assertion of the
-   * test. If we will stop just before executing any task starting at the next millisecond, we might
-   * be off by one iteration/task and there would be a need to awkwardly advance by delayTime+1.
-   */
-  private fun TestScope.advanceTimeByInclusive(delayTime: Duration) {
-    testScheduler.advanceTimeBy(delayTime)
-    testScheduler.runCurrent()
-  }
+  @Test
+  fun playerIdle_reportsInitialPlaceholderDataAndDoesNotBlockMainThread() =
+    runTest(testDispatcher) {
+      val player = TestPlayer(playbackState = Player.STATE_IDLE, playlist = listOf())
+      lateinit var state: ProgressStateWithTickInterval
+      composeTestRule.setContent {
+        state =
+          rememberProgressStateWithTickInterval(
+            player,
+            tickIntervalMs = 100,
+            scope = backgroundScope,
+          )
+      }
+      assertThat(state.durationMs).isEqualTo(C.TIME_UNSET)
+      assertThat(state.currentPositionMs).isEqualTo(0)
+      assertThat(state.bufferedPositionMs).isEqualTo(0)
 
-  // A scope that
-  // 1. inherits the job from backgroundScope for cancellation after test assertions
-  // 2. uses Composable's FrameClock to its context for animation, e.g. withFrameMillis
-  @Composable
-  private fun TestScope.rememberCoroutineScopeWithBackgroundCancellation(): CoroutineScope =
-    rememberCoroutineScope().plus(backgroundScope.coroutineContext)
+      // Wait for any pending updates to verify the state stays the same and is not blocked on the
+      // main thread.
+      advanceTimeByInclusive(200.milliseconds)
+
+      assertThat(state.durationMs).isEqualTo(C.TIME_UNSET)
+      assertThat(state.currentPositionMs).isEqualTo(0)
+      assertThat(state.bufferedPositionMs).isEqualTo(0)
+    }
+
+  @Test
+  fun playerEnded_reportsFinalStateAndDoesNotBlockMainThread() =
+    runTest(testDispatcher) {
+      val player =
+        TestPlayer(
+          playbackState = Player.STATE_READY,
+          playlist = listOf(MediaItemData.Builder("SingleItem").setDurationUs(10_000_000).build()),
+        )
+      lateinit var state: ProgressStateWithTickInterval
+      composeTestRule.setContent {
+        state =
+          rememberProgressStateWithTickInterval(
+            player,
+            tickIntervalMs = 100,
+            scope = backgroundScope,
+          )
+      }
+      player.setPosition(10_000)
+      player.setBufferedPositionMs(10_000)
+      advanceTimeByInclusive(200.milliseconds)
+
+      // Check state before change to ENDED, immediately after the change and after waiting for any
+      // pending updates to ensure the main thread is not blocked.
+      assertThat(state.durationMs).isEqualTo(10_000)
+      assertThat(state.currentPositionMs).isEqualTo(10_000)
+      assertThat(state.bufferedPositionMs).isEqualTo(10_000)
+      player.setPlaybackState(Player.STATE_ENDED)
+      assertThat(state.durationMs).isEqualTo(10_000)
+      assertThat(state.currentPositionMs).isEqualTo(10_000)
+      assertThat(state.bufferedPositionMs).isEqualTo(10_000)
+      advanceTimeByInclusive(200.milliseconds)
+
+      assertThat(state.durationMs).isEqualTo(10_000)
+      assertThat(state.currentPositionMs).isEqualTo(10_000)
+      assertThat(state.bufferedPositionMs).isEqualTo(10_000)
+    }
 }

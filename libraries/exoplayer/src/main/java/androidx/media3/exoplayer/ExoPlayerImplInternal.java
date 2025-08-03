@@ -18,6 +18,7 @@ package androidx.media3.exoplayer;
 import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.common.util.Assertions.checkState;
 import static androidx.media3.common.util.Util.castNonNull;
+import static androidx.media3.common.util.Util.constrainValue;
 import static androidx.media3.common.util.Util.msToUs;
 import static androidx.media3.exoplayer.MediaPeriodQueue.UPDATE_PERIOD_QUEUE_ALTERED_PREWARMING_PERIOD;
 import static androidx.media3.exoplayer.MediaPeriodQueue.UPDATE_PERIOD_QUEUE_ALTERED_READING_PERIOD;
@@ -235,6 +236,7 @@ import java.util.Objects;
   private boolean scrubbingModeEnabled;
   private boolean seekIsPendingWhileScrubbing;
   @Nullable private SeekPosition queuedSeekWhileScrubbing;
+  private int droppedSeeksWhileScrubbing;
   private PlaybackInfo playbackInfo;
   private PlaybackInfoUpdate playbackInfoUpdate;
   private boolean releasedOnApplicationThread;
@@ -1452,7 +1454,7 @@ import java.util.Objects;
     } else if (playbackMaybeBecameStuckAtMs == C.TIME_UNSET) {
       playbackMaybeBecameStuckAtMs = clock.elapsedRealtime();
     } else if (clock.elapsedRealtime() - playbackMaybeBecameStuckAtMs >= PLAYBACK_STUCK_AFTER_MS) {
-      throw new IllegalStateException("Playback stuck buffering and not loading");
+      throw new StuckPlayerException(StuckPlayerException.STUCK_BUFFERING_NOT_LOADING);
     }
 
     boolean isPlaying = shouldPlayWhenReady() && playbackInfo.playbackState == Player.STATE_READY;
@@ -1555,6 +1557,9 @@ import java.util.Objects;
       throws ExoPlaybackException {
     playbackInfoUpdate.incrementPendingOperationAcks(incrementAcks ? 1 : 0);
     if (seekIsPendingWhileScrubbing) {
+      if (queuedSeekWhileScrubbing != null) {
+        droppedSeeksWhileScrubbing++;
+      }
       queuedSeekWhileScrubbing = seekPosition;
       return;
     }
@@ -1793,6 +1798,12 @@ import java.util.Objects;
   private void setScrubbingModeEnabledInternal(boolean scrubbingModeEnabled)
       throws ExoPlaybackException {
     if (!scrubbingModeEnabled) {
+      if (droppedSeeksWhileScrubbing > 0) {
+        int localDroppedSeeksCount = droppedSeeksWhileScrubbing;
+        applicationLooperHandler.post(
+            () -> analyticsCollector.onDroppedSeeksWhileScrubbing(localDroppedSeeksCount));
+      }
+      droppedSeeksWhileScrubbing = 0;
       seekIsPendingWhileScrubbing = false;
       handler.removeMessages(MSG_SEEK_COMPLETED_IN_SCRUBBING_MODE);
       if (queuedSeekWhileScrubbing != null) {
@@ -3545,6 +3556,13 @@ import java.util.Objects;
             timeline.getPeriodPositionUs(window, period, windowIndex, windowPositionUs);
         newPeriodUid = periodPositionUs.first;
         newContentPositionUs = periodPositionUs.second;
+      } else {
+        // For all other periods, we may need to clip the duration again.
+        long newPeriodDurationUs = timeline.getPeriodByUid(newPeriodUid, period).durationUs;
+        if (newPeriodDurationUs != C.TIME_UNSET) {
+          newContentPositionUs =
+              constrainValue(newContentPositionUs, /* min= */ 0, /* max= */ period.durationUs - 1);
+        }
       }
       // Use an explicitly requested content position as new target live offset.
       setTargetLiveOffset = true;

@@ -29,7 +29,6 @@ import static androidx.media3.test.utils.TestUtil.retrieveTrackFormat;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.junit.Assume.assumeFalse;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -373,6 +372,27 @@ public final class AndroidTestUtil {
                   .setCodecs("avc1.64001F")
                   .build())
           .setVideoDurationUs(1_024_000L)
+          .setVideoFrameCount(30)
+          .setVideoTimestampsUs(
+              ImmutableList.of(
+                  0L, 33_366L, 66_733L, 100_100L, 133_466L, 166_833L, 200_200L, 233_566L, 266_933L,
+                  300_300L, 333_666L, 367_033L, 400_400L, 433_766L, 467_133L, 500_500L, 533_866L,
+                  567_233L, 600_600L, 633_966L, 667_333L, 700_700L, 734_066L, 767_433L, 800_800L,
+                  834_166L, 867_533L, 900_900L, 934_266L, 967_633L))
+          .build();
+
+  public static final AssetInfo MP4_VIDEO_ONLY_ASSET =
+      new AssetInfo.Builder("asset:///media/mp4/sample_video_only.mp4")
+          .setVideoFormat(
+              new Format.Builder()
+                  .setSampleMimeType(VIDEO_H264)
+                  .setWidth(1080)
+                  .setHeight(720)
+                  .setFrameRate(29.97f)
+                  .setCodecs("avc1.64001F")
+                  .build())
+          // This is slightly different from sample.mp4
+          .setVideoDurationUs(1_001_000L)
           .setVideoFrameCount(30)
           .setVideoTimestampsUs(
               ImmutableList.of(
@@ -1098,6 +1118,10 @@ public final class AndroidTestUtil {
   public static final AssetInfo WAV_192KHZ_ASSET =
       new AssetInfo.Builder("asset:///media/wav/sample_192khz.wav").build();
 
+  public static final AssetInfo WAV_80KHZ_MONO_20_REPEATING_1_SAMPLES_ASSET =
+      new AssetInfo.Builder("asset:///media/wav/sample_80KHz_mono_20_repeating_1_samples.wav")
+          .build();
+
   public static final AssetInfo FLAC_STEREO_ASSET =
       new AssetInfo.Builder("asset:///media/flac/bear.flac").build();
 
@@ -1291,9 +1315,6 @@ public final class AndroidTestUtil {
   public static ImmutableList<Bitmap> extractBitmapsFromVideo(
       Context context, String filePath, Bitmap.Config config)
       throws IOException, InterruptedException {
-    // b/298599172 - runUntilComparisonFrameOrEnded fails on this device because reading decoder
-    //  output as a bitmap doesn't work.
-    assumeFalse(SDK_INT == 21 && Ascii.toLowerCase(Build.MODEL).contains("nexus"));
     ImmutableList.Builder<Bitmap> bitmaps = new ImmutableList.Builder<>();
     try (VideoDecodingWrapper decodingWrapper =
         new VideoDecodingWrapper(

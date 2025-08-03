@@ -2146,38 +2146,6 @@ public class TransformerEndToEndTest {
   }
 
   @Test
-  public void transmux_audioWithEditListUsingInAppMuxer_preservesDuration() throws Exception {
-    Context context = ApplicationProvider.getApplicationContext();
-    Transformer transformer =
-        new Transformer.Builder(context).setMuxerFactory(new InAppMp4Muxer.Factory()).build();
-    MediaItem mediaItem =
-        MediaItem.fromUri(Uri.parse("asset:///media/mp4/long_edit_list_audioonly.mp4"));
-
-    ExportTestResult exportTestResult =
-        new TransformerAndroidTestRunner.Builder(context, transformer)
-            .build()
-            .run(testId, mediaItem);
-
-    Mp4Extractor mp4Extractor = new Mp4Extractor(new DefaultSubtitleParserFactory());
-    FakeExtractorOutput fakeExtractorOutput =
-        TestUtil.extractAllSamplesFromFilePath(mp4Extractor, exportTestResult.filePath);
-    assertThat(fakeExtractorOutput.seekMap.getDurationUs()).isEqualTo(1_562_800);
-    assertThat(fakeExtractorOutput.numberOfTracks).isEqualTo(1);
-    FakeTrackOutput audioTrack = fakeExtractorOutput.trackOutputs.get(0);
-    int expectedSampleCount = 68;
-    audioTrack.assertSampleCount(expectedSampleCount);
-    assertThat(audioTrack.lastFormat.encoderDelay).isEqualTo(0);
-    assertThat(audioTrack.getSampleTimeUs(/* index= */ 0)).isEqualTo(-16833);
-    // TODO: b/270583563 - InAppMuxer always uses 1 / 48_000 timebase for audio.
-    //  The audio file in this test is 44_100 Hz, with timebase for audio of 1 / 44_100 and
-    //  each sample duration is exactly 1024 / 44_100, with no rounding errors.
-    //  Since InAppMuxer uses a different timebase for audio, some rounding errors are introduced
-    //  and MP4 sample durations are off.
-    assertThat(audioTrack.getSampleTimeUs(/* index= */ expectedSampleCount - 1))
-        .isEqualTo(1_539_520);
-  }
-
-  @Test
   public void transmux_videoWithEditList_trimsFirstIdrFrameDuration() throws Exception {
     Context context = ApplicationProvider.getApplicationContext();
     assumeTrue("MediaMuxer doesn't support B frames reliably on older SDK versions", SDK_INT >= 29);
