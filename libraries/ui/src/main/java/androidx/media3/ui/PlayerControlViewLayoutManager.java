@@ -595,6 +595,8 @@ import java.util.List;
     if (uxState == UX_STATE_ANIMATING_HIDE || uxState == UX_STATE_NONE_VISIBLE) {
       return;
     }
+    showAllBarsAnimator.cancel();
+    showMainBarAnimator.cancel();
     removeHideCallbacks();
     hideController();
   }
