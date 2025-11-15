@@ -16,9 +16,9 @@
 
 package androidx.media3.test.utils.robolectric;
 
-import static androidx.media3.common.util.Assertions.checkNotNull;
-import static androidx.media3.common.util.Assertions.checkState;
 import static androidx.media3.test.utils.robolectric.RobolectricUtil.runMainLooperUntil;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 
 import android.os.Looper;
 import androidx.annotation.Nullable;
@@ -157,6 +157,22 @@ public final class TestPlayerRunHelper {
     public final void untilLoadingIs(boolean expectedIsLoading)
         throws PlaybackException, TimeoutException {
       runUntil(() -> player.isLoading() == expectedIsLoading);
+    }
+
+    /**
+     * Runs tasks of the main {@link Looper} until {@link Player#isPlayingAd()} ()} matches the
+     * expected value or an error occurs.
+     *
+     * @throws PlaybackException If a playback error occurs.
+     * @throws IllegalStateException If non-fatal playback errors occur, and aren't {@linkplain
+     *     #ignoringNonFatalErrors() ignored} (the non-fatal exceptions will be attached with {@link
+     *     Throwable#addSuppressed(Throwable)}).
+     * @throws TimeoutException If the {@linkplain RobolectricUtil#DEFAULT_TIMEOUT_MS default
+     *     timeout} is exceeded.
+     */
+    public final void untilPlayingAdIs(boolean expectedIsPlayingAd)
+        throws PlaybackException, TimeoutException {
+      runUntil(() -> player.isPlayingAd() == expectedIsPlayingAd);
     }
 
     /**
@@ -459,7 +475,13 @@ public final class TestPlayerRunHelper {
      */
     public void untilPositionAtLeast(int mediaItemIndex, long positionMs)
         throws PlaybackException, TimeoutException {
-      untilBackgroundThreadCondition(
+      player
+          .createMessage((messageType, message) -> {})
+          .setPosition(mediaItemIndex, positionMs)
+          .setLooper(Looper.getMainLooper())
+          .send();
+      player.play();
+      runUntil(
           () ->
               player.getCurrentMediaItemIndex() == mediaItemIndex
                   && player.getContentPosition() >= positionMs);

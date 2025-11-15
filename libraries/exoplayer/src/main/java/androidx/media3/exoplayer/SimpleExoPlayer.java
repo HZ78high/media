@@ -591,6 +591,12 @@ public class SimpleExoPlayer extends BasePlayer implements ExoPlayer {
   }
 
   @Override
+  public void setVirtualDeviceId(int virtualDeviceId) {
+    blockUntilConstructorFinished();
+    player.setVirtualDeviceId(virtualDeviceId);
+  }
+
+  @Override
   public void setVolume(float volume) {
     blockUntilConstructorFinished();
     player.setVolume(volume);
@@ -1065,6 +1071,24 @@ public class SimpleExoPlayer extends BasePlayer implements ExoPlayer {
   }
 
   @Override
+  public void setMaxSeekToPreviousPositionMs(long maxSeekToPreviousPositionMs) {
+    blockUntilConstructorFinished();
+    player.setMaxSeekToPreviousPositionMs(maxSeekToPreviousPositionMs);
+  }
+
+  @Override
+  public void setSeekBackIncrementMs(long seekBackIncrementMs) {
+    blockUntilConstructorFinished();
+    player.setSeekBackIncrementMs(seekBackIncrementMs);
+  }
+
+  @Override
+  public void setSeekForwardIncrementMs(long seekForwardIncrementMs) {
+    blockUntilConstructorFinished();
+    player.setSeekForwardIncrementMs(seekForwardIncrementMs);
+  }
+
+  @Override
   public void setForegroundMode(boolean foregroundMode) {
     blockUntilConstructorFinished();
     player.setForegroundMode(foregroundMode);
@@ -1104,6 +1128,12 @@ public class SimpleExoPlayer extends BasePlayer implements ExoPlayer {
   public Renderer getRenderer(int index) {
     blockUntilConstructorFinished();
     return player.getRenderer(index);
+  }
+
+  @Override
+  public Renderer getSecondaryRenderer(int index) {
+    blockUntilConstructorFinished();
+    return player.getSecondaryRenderer(index);
   }
 
   @Override

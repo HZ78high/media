@@ -19,15 +19,13 @@ import static androidx.media3.common.C.AUXILIARY_TRACK_TYPE_DEPTH_INVERSE;
 import static androidx.media3.common.C.AUXILIARY_TRACK_TYPE_DEPTH_LINEAR;
 import static androidx.media3.common.C.AUXILIARY_TRACK_TYPE_ORIGINAL;
 import static androidx.media3.common.C.AUXILIARY_TRACK_TYPE_UNDEFINED;
-import static androidx.media3.common.util.Assertions.checkNotNull;
-import static androidx.media3.common.util.Assertions.checkState;
-import static androidx.media3.common.util.Assertions.checkStateNotNull;
 import static androidx.media3.container.MdtaMetadataEntry.AUXILIARY_TRACKS_SAMPLES_NOT_INTERLEAVED;
 import static androidx.media3.extractor.mp4.BoxParser.parseTraks;
-import static androidx.media3.extractor.mp4.MetadataUtil.findMdtaMetadataEntryWithKey;
 import static androidx.media3.extractor.mp4.MimeTypeResolver.getContainerMimeType;
 import static androidx.media3.extractor.mp4.Sniffer.BRAND_HEIC;
 import static androidx.media3.extractor.mp4.Sniffer.BRAND_QUICKTIME;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.annotation.ElementType.TYPE_USE;
@@ -39,7 +37,6 @@ import androidx.media3.common.Format;
 import androidx.media3.common.Metadata;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.ParserException;
-import androidx.media3.common.util.Assertions;
 import androidx.media3.common.util.ParsableByteArray;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.container.MdtaMetadataEntry;
@@ -53,13 +50,16 @@ import androidx.media3.extractor.ExtractorInput;
 import androidx.media3.extractor.ExtractorOutput;
 import androidx.media3.extractor.ExtractorsFactory;
 import androidx.media3.extractor.GaplessInfoHolder;
+import androidx.media3.extractor.MpegAudioUtil;
 import androidx.media3.extractor.PositionHolder;
 import androidx.media3.extractor.SeekMap;
 import androidx.media3.extractor.SeekPoint;
 import androidx.media3.extractor.SniffFailure;
+import androidx.media3.extractor.TrackAwareSeekMap;
 import androidx.media3.extractor.TrackOutput;
 import androidx.media3.extractor.TrueHdSampleRechunker;
-import androidx.media3.extractor.metadata.mp4.MotionPhotoMetadata;
+import androidx.media3.extractor.metadata.MotionPhotoMetadata;
+import androidx.media3.extractor.metadata.ThumbnailMetadata;
 import androidx.media3.extractor.metadata.mp4.SlowMotionData;
 import androidx.media3.extractor.text.SubtitleParser;
 import androidx.media3.extractor.text.SubtitleTranscodingExtractorOutput;
@@ -77,7 +77,7 @@ import java.util.Objects;
 
 /** Extracts data from the MP4 container format. */
 @UnstableApi
-public final class Mp4Extractor implements Extractor, SeekMap {
+public final class Mp4Extractor implements Extractor {
 
   /**
    * Creates a factory for {@link Mp4Extractor} instances with the provided {@link
@@ -116,13 +116,9 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   public static final int FLAG_WORKAROUND_IGNORE_EDIT_LISTS = 1;
 
   /**
-   * Flag to extract {@link MotionPhotoMetadata} from HEIC motion photos following the Google Photos
-   * Motion Photo File Format V1.1.
-   *
-   * <p>As playback is not supported for motion photos, this flag should only be used for metadata
-   * retrieval use cases.
+   * @deprecated Use {@code HeifExtractor} to extract {@link MotionPhotoMetadata} from HEIC files.
    */
-  public static final int FLAG_READ_MOTION_PHOTO_METADATA = 1 << 1;
+  @Deprecated public static final int FLAG_READ_MOTION_PHOTO_METADATA = 1 << 1;
 
   /**
    * Flag to extract {@link SlowMotionData} metadata from Samsung Extension Format (SEF) slow motion
@@ -180,6 +176,12 @@ public final class Mp4Extractor implements Extractor, SeekMap {
    * retrieval scenarios where individual sample data is not required.
    */
   public static final int FLAG_OMIT_TRACK_SAMPLE_TABLE = 1 << 8;
+
+  /** The maximum number of sync samples to scan when searching for a thumbnail. */
+  private static final int MAX_SYNC_SAMPLES_TO_SCAN_FOR_THUMBNAIL = 20;
+
+  /** The maximum duration to scan for a thumbnail, in microseconds. */
+  private static final long MAX_DURATION_US_TO_SCAN_FOR_THUMBNAIL = 10_000_000L;
 
   /**
    * @deprecated Use {@link #newFactory(SubtitleParser.Factory)} instead.
@@ -271,8 +273,6 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   private Mp4Track[] tracks;
 
   @Nullable private long[][] accumulatedSampleSizes;
-  private int firstVideoTrackIndex;
-  private long durationUs;
   private @FileType int fileType;
   @Nullable private MotionPhotoMetadata motionPhotoMetadata;
 
@@ -430,91 +430,6 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     }
   }
 
-  // SeekMap implementation.
-
-  @Override
-  public boolean isSeekable() {
-    return true;
-  }
-
-  @Override
-  public long getDurationUs() {
-    return durationUs;
-  }
-
-  @Override
-  public SeekPoints getSeekPoints(long timeUs) {
-    return getSeekPoints(timeUs, /* trackId= */ C.INDEX_UNSET);
-  }
-
-  // Non-inherited public methods.
-
-  /**
-   * Equivalent to {@link SeekMap#getSeekPoints(long)}, except it adds the {@code trackId}
-   * parameter.
-   *
-   * @param timeUs A seek time in microseconds.
-   * @param trackId The id of the track on which to seek for {@link SeekPoints}. May be {@link
-   *     C#INDEX_UNSET} if the extractor is expected to define the strategy for generating {@link
-   *     SeekPoints}.
-   * @return The corresponding seek points.
-   */
-  public SeekPoints getSeekPoints(long timeUs, int trackId) {
-    if (tracks.length == 0) {
-      return new SeekPoints(SeekPoint.START);
-    }
-
-    long firstTimeUs;
-    long firstOffset;
-    long secondTimeUs = C.TIME_UNSET;
-    long secondOffset = C.INDEX_UNSET;
-
-    // Note that the id matches the index in tracks.
-    int mainTrackIndex = trackId != C.INDEX_UNSET ? trackId : firstVideoTrackIndex;
-    // If we have a video track, use it to establish one or two seek points.
-    if (mainTrackIndex != C.INDEX_UNSET) {
-      TrackSampleTable sampleTable = tracks[mainTrackIndex].sampleTable;
-      int sampleIndex = getSynchronizationSampleIndex(sampleTable, timeUs);
-      if (sampleIndex == C.INDEX_UNSET) {
-        return new SeekPoints(SeekPoint.START);
-      }
-      long sampleTimeUs = sampleTable.timestampsUs[sampleIndex];
-      firstTimeUs = sampleTimeUs;
-      firstOffset = sampleTable.offsets[sampleIndex];
-      if (sampleTimeUs < timeUs && sampleIndex < sampleTable.sampleCount - 1) {
-        int secondSampleIndex = sampleTable.getIndexOfLaterOrEqualSynchronizationSample(timeUs);
-        if (secondSampleIndex != C.INDEX_UNSET && secondSampleIndex != sampleIndex) {
-          secondTimeUs = sampleTable.timestampsUs[secondSampleIndex];
-          secondOffset = sampleTable.offsets[secondSampleIndex];
-        }
-      }
-    } else {
-      firstTimeUs = timeUs;
-      firstOffset = Long.MAX_VALUE;
-    }
-
-    if (trackId == C.INDEX_UNSET) {
-      // Take into account other tracks, but only if the caller has not specified a trackId.
-      for (int i = 0; i < tracks.length; i++) {
-        if (i != firstVideoTrackIndex) {
-          TrackSampleTable sampleTable = tracks[i].sampleTable;
-          firstOffset = maybeAdjustSeekOffset(sampleTable, firstTimeUs, firstOffset);
-          if (secondTimeUs != C.TIME_UNSET) {
-            secondOffset = maybeAdjustSeekOffset(sampleTable, secondTimeUs, secondOffset);
-          }
-        }
-      }
-    }
-
-    SeekPoint firstSeekPoint = new SeekPoint(firstTimeUs, firstOffset);
-    if (secondTimeUs == C.TIME_UNSET) {
-      return new SeekPoints(firstSeekPoint);
-    } else {
-      SeekPoint secondSeekPoint = new SeekPoint(secondTimeUs, secondOffset);
-      return new SeekPoints(firstSeekPoint, secondSeekPoint);
-    }
-  }
-
   /**
    * Returns the list of sample timestamps of a {@code trackId}, in microseconds.
    *
@@ -570,8 +485,14 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     }
 
     if (atomSize < atomHeaderBytesRead) {
-      throw ParserException.createForUnsupportedContainerFeature(
-          "Atom size less than header length (unsupported).");
+      if (atomType == Mp4Box.TYPE_free && atomHeaderBytesRead == Mp4Box.HEADER_SIZE) {
+        // Workaround for writers that could create a malformed 'free' box with a size less than
+        // its header, causing file corruption. [See internal: b/438187097].
+        atomSize = atomHeaderBytesRead;
+      } else {
+        throw ParserException.createForUnsupportedContainerFeature(
+            "Atom size less than header length (unsupported).");
+      }
     }
 
     if (shouldParseContainerAtom(atomType)) {
@@ -589,8 +510,8 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     } else if (shouldParseLeafAtom(atomType)) {
       // We don't support parsing of leaf atoms that define extended atom sizes, or that have
       // lengths greater than Integer.MAX_VALUE.
-      Assertions.checkState(atomHeaderBytesRead == Mp4Box.HEADER_SIZE);
-      Assertions.checkState(atomSize <= Integer.MAX_VALUE);
+      checkState(atomHeaderBytesRead == Mp4Box.HEADER_SIZE);
+      checkState(atomSize <= Integer.MAX_VALUE);
       ParsableByteArray atomData = new ParsableByteArray((int) atomSize);
       System.arraycopy(atomHeader.getData(), 0, atomData.getData(), 0, Mp4Box.HEADER_SIZE);
       this.atomData = atomData;
@@ -690,7 +611,7 @@ public final class Mp4Extractor implements Extractor, SeekMap {
     if (meta != null) {
       mdtaMetadata = BoxParser.parseMdtaFromMeta(meta);
       if (readingAuxiliaryTracks) {
-        checkStateNotNull(mdtaMetadata);
+        checkNotNull(mdtaMetadata);
         maybeSetDefaultSampleOffsetForAuxiliaryTracks(mdtaMetadata);
         auxiliaryTrackTypesForAuxiliaryTracks =
             getAuxiliaryTrackTypesForAuxiliaryTracks(mdtaMetadata);
@@ -749,7 +670,6 @@ public final class Mp4Extractor implements Extractor, SeekMap {
       Track track = trackSampleTable.track;
       Mp4Track mp4Track =
           new Mp4Track(track, trackSampleTable, extractorOutput.track(trackIndex++, track.type));
-
       long trackDurationUs =
           track.durationUs != C.TIME_UNSET ? track.durationUs : trackSampleTable.durationUs;
       mp4Track.trackOutput.durationUs(trackDurationUs);
@@ -780,6 +700,13 @@ public final class Mp4Extractor implements Extractor, SeekMap {
         formatBuilder.setRoleFlags(roleFlags);
       }
 
+      @Nullable Metadata thumbnailMetadata = null;
+      long thumbnailPresentationTimeUs =
+          findBestThumbnailPresentationTimeUs(trackSampleTable, trackDurationUs);
+      if (thumbnailPresentationTimeUs != C.TIME_UNSET) {
+        thumbnailMetadata = new Metadata(new ThumbnailMetadata(thumbnailPresentationTimeUs));
+      }
+
       MetadataUtil.setFormatGaplessInfo(track.type, gaplessInfoHolder, formatBuilder);
       MetadataUtil.setFormatMetadata(
           track.type,
@@ -788,42 +715,86 @@ public final class Mp4Extractor implements Extractor, SeekMap {
           track.format.metadata,
           slowMotionMetadataEntries.isEmpty() ? null : new Metadata(slowMotionMetadataEntries),
           udtaMetadata,
-          mvhdMetadata);
+          mvhdMetadata,
+          thumbnailMetadata);
       formatBuilder.setContainerMimeType(containerMimeType);
-      mp4Track.trackOutput.format(formatBuilder.build());
+      if (Objects.equals(track.format.sampleMimeType, MimeTypes.AUDIO_MPEG)) {
+        // The moov and esds boxes don't contain enough information to distinguish between MPEG
+        // audio layers 1, 2 and 3, but the distinction is important to select the right MIME type
+        // for MediaCodec decoders (and other decoders that handle the same audio/mpeg-L1 and
+        // audio/mpeg-L2 MIME types). So we store the format with audio/mpeg for now, and then
+        // update the MIME type and pass it to TrackOutput.format(...) based on the layer info in
+        // the first sample.
+        mp4Track.pendingFormat = formatBuilder.build();
+      } else {
+        mp4Track.trackOutput.format(formatBuilder.build());
+      }
 
       if (track.type == C.TRACK_TYPE_VIDEO && firstVideoTrackIndex == C.INDEX_UNSET) {
         firstVideoTrackIndex = tracks.size();
       }
       tracks.add(mp4Track);
     }
-    this.firstVideoTrackIndex = firstVideoTrackIndex;
-    this.durationUs = durationUs;
     this.tracks = tracks.toArray(new Mp4Track[0]);
     accumulatedSampleSizes =
         !omitTrackSampleTable ? calculateAccumulatedSampleSizes(this.tracks) : null;
 
     extractorOutput.endTracks();
-    extractorOutput.seekMap(this);
+    extractorOutput.seekMap(new Mp4SeekMap(durationUs, this.tracks, firstVideoTrackIndex));
+  }
+
+  private static long findBestThumbnailPresentationTimeUs(
+      TrackSampleTable sampleTable, long durationUs) {
+    if (!MimeTypes.isVideo(sampleTable.track.format.sampleMimeType)) {
+      return C.TIME_UNSET;
+    }
+
+    int bestSampleIndex = -1;
+    int maxSampleSize = 0;
+
+    int syncSampleCount =
+        sampleTable.hasOnlySyncSamples
+            ? sampleTable.sampleCount
+            : sampleTable.syncSampleIndices.length;
+    int scanLimit = min(syncSampleCount, MAX_SYNC_SAMPLES_TO_SCAN_FOR_THUMBNAIL);
+    checkState(durationUs != C.TIME_UNSET);
+    long maxDurationUsToScan = min(durationUs, MAX_DURATION_US_TO_SCAN_FOR_THUMBNAIL);
+
+    for (int i = 0; i < scanLimit; i++) {
+      int sampleIndex = sampleTable.hasOnlySyncSamples ? i : sampleTable.syncSampleIndices[i];
+      long timestampUs = sampleTable.timestampsUs[sampleIndex];
+
+      if (timestampUs > maxDurationUsToScan) {
+        break;
+      }
+
+      if (timestampUs >= 0 && sampleTable.sizes[sampleIndex] > maxSampleSize) {
+        maxSampleSize = sampleTable.sizes[sampleIndex];
+        bestSampleIndex = sampleIndex;
+      }
+    }
+
+    return bestSampleIndex == -1 ? C.TIME_UNSET : sampleTable.timestampsUs[bestSampleIndex];
   }
 
   private boolean shouldSeekToAxteAtom(@Nullable Metadata mdtaMetadata) {
-    if (mdtaMetadata == null) {
+    if (mdtaMetadata == null || (flags & FLAG_READ_AUXILIARY_TRACKS) == 0) {
       return false;
     }
-    if ((flags & FLAG_READ_AUXILIARY_TRACKS) != 0) {
-      @Nullable
-      MdtaMetadataEntry axteAtomOffsetMetadata =
-          findMdtaMetadataEntryWithKey(mdtaMetadata, MdtaMetadataEntry.KEY_AUXILIARY_TRACKS_OFFSET);
-      if (axteAtomOffsetMetadata != null) {
-        long offset = new ParsableByteArray(axteAtomOffsetMetadata.value).readUnsignedLongToLong();
-        if (offset > 0) {
-          axteAtomOffset = offset;
-          return true;
-        }
-      }
+    @Nullable
+    MdtaMetadataEntry axteAtomOffsetMetadata =
+        mdtaMetadata.getFirstMatchingEntry(
+            MdtaMetadataEntry.class,
+            mdtaEntry -> mdtaEntry.key.equals(MdtaMetadataEntry.KEY_AUXILIARY_TRACKS_OFFSET));
+    if (axteAtomOffsetMetadata == null) {
+      return false;
     }
-    return false;
+    long offset = new ParsableByteArray(axteAtomOffsetMetadata.value).readUnsignedLongToLong();
+    if (offset <= 0) {
+      return false;
+    }
+    axteAtomOffset = offset;
+    return true;
   }
 
   /**
@@ -833,19 +804,22 @@ public final class Mp4Extractor implements Extractor, SeekMap {
   private void maybeSetDefaultSampleOffsetForAuxiliaryTracks(Metadata metadata) {
     @Nullable
     MdtaMetadataEntry samplesInterleavedMetadata =
-        findMdtaMetadataEntryWithKey(metadata, MdtaMetadataEntry.KEY_AUXILIARY_TRACKS_INTERLEAVED);
-    if (samplesInterleavedMetadata != null) {
-      if (samplesInterleavedMetadata.value[0] == AUXILIARY_TRACKS_SAMPLES_NOT_INTERLEAVED) {
-        sampleOffsetForAuxiliaryTracks = axteAtomOffset + 16; // 16 bits for axte atom header
-      }
+        metadata.getFirstMatchingEntry(
+            MdtaMetadataEntry.class,
+            mdtaEntry -> mdtaEntry.key.equals(MdtaMetadataEntry.KEY_AUXILIARY_TRACKS_INTERLEAVED));
+    if (samplesInterleavedMetadata != null
+        && samplesInterleavedMetadata.value[0] == AUXILIARY_TRACKS_SAMPLES_NOT_INTERLEAVED) {
+      sampleOffsetForAuxiliaryTracks = axteAtomOffset + 16; // 16 bits for axte atom header
     }
   }
 
   private List<@C.AuxiliaryTrackType Integer> getAuxiliaryTrackTypesForAuxiliaryTracks(
       Metadata metadata) {
     MdtaMetadataEntry trackTypesMetadata =
-        checkStateNotNull(
-            findMdtaMetadataEntryWithKey(metadata, MdtaMetadataEntry.KEY_AUXILIARY_TRACKS_MAP));
+        checkNotNull(
+            metadata.getFirstMatchingEntry(
+                MdtaMetadataEntry.class,
+                mdtaEntry -> mdtaEntry.key.equals(MdtaMetadataEntry.KEY_AUXILIARY_TRACKS_MAP)));
     List<Integer> auxiliaryTrackTypesFromMap = trackTypesMetadata.getAuxiliaryTrackTypesFromMap();
     List<@C.AuxiliaryTrackType Integer> auxiliaryTrackTypes =
         new ArrayList<>(auxiliaryTrackTypesFromMap.size());
@@ -989,6 +963,22 @@ public final class Mp4Extractor implements Extractor, SeekMap {
           sampleBytesWritten += Ac4Util.SAMPLE_HEADER_SIZE;
         }
         sampleSize += Ac4Util.SAMPLE_HEADER_SIZE;
+      } else if (track.pendingFormat != null
+          && Objects.equals(track.track.format.sampleMimeType, MimeTypes.AUDIO_MPEG)) {
+        Format pendingFormat = track.pendingFormat;
+        scratch.reset(/* limit= */ 4);
+        input.peekFully(scratch.getData(), /* offset= */ 0, /* length= */ 4);
+        input.resetPeekPosition();
+        MpegAudioUtil.Header mpegHeader = new MpegAudioUtil.Header();
+        track.trackOutput.format(
+            mpegHeader.setForHeaderData(scratch.readInt())
+                    && !Objects.equals(pendingFormat.sampleMimeType, mpegHeader.mimeType)
+                ? pendingFormat
+                    .buildUpon()
+                    .setSampleMimeType(checkNotNull(mpegHeader.mimeType))
+                    .build()
+                : pendingFormat);
+        track.pendingFormat = null;
       } else if (trueHdSampleRechunker != null) {
         trueHdSampleRechunker.startSample(input);
       }
@@ -1054,8 +1044,7 @@ public final class Mp4Extractor implements Extractor, SeekMap {
         continue;
       }
       long sampleOffset = track.sampleTable.offsets[sampleIndex];
-      long sampleAccumulatedBytes =
-          checkStateNotNull(accumulatedSampleSizes)[trackIndex][sampleIndex];
+      long sampleAccumulatedBytes = checkNotNull(accumulatedSampleSizes)[trackIndex][sampleIndex];
       long skipAmount = sampleOffset - inputPosition;
       boolean requiresReload = skipAmount < 0 || skipAmount >= RELOAD_MINIMUM_SEEK_DISTANCE;
       if ((!requiresReload && preferredRequiresReload)
@@ -1294,6 +1283,12 @@ public final class Mp4Extractor implements Extractor, SeekMap {
 
     public int sampleIndex;
 
+    /**
+     * A {@link Format} that needs to be passed to {@link #trackOutput}, after being possibly
+     * modified based on sample data, before {@link TrackOutput#sampleMetadata} is called.
+     */
+    @Nullable public Format pendingFormat;
+
     public Mp4Track(Track track, TrackSampleTable sampleTable, TrackOutput trackOutput) {
       this.track = track;
       this.sampleTable = sampleTable;
@@ -1302,6 +1297,95 @@ public final class Mp4Extractor implements Extractor, SeekMap {
           MimeTypes.AUDIO_TRUEHD.equals(track.format.sampleMimeType)
               ? new TrueHdSampleRechunker()
               : null;
+    }
+  }
+
+  private static final class Mp4SeekMap implements TrackAwareSeekMap {
+    private final long durationUs;
+    private final Mp4Track[] tracks;
+    private final int firstVideoTrackIndex;
+
+    public Mp4SeekMap(long durationUs, Mp4Track[] tracks, int firstVideoTrackIndex) {
+      this.durationUs = durationUs;
+      this.tracks = tracks;
+      this.firstVideoTrackIndex = firstVideoTrackIndex;
+    }
+
+    @Override
+    public boolean isSeekable() {
+      return true;
+    }
+
+    @Override
+    public boolean isSeekable(int trackId) {
+      return true;
+    }
+
+    @Override
+    public long getDurationUs() {
+      return durationUs;
+    }
+
+    @Override
+    public SeekPoints getSeekPoints(long timeUs) {
+      return getSeekPoints(timeUs, /* trackId= */ C.INDEX_UNSET);
+    }
+
+    @Override
+    public SeekPoints getSeekPoints(long timeUs, int trackId) {
+      if (tracks.length == 0) {
+        return new SeekPoints(SeekPoint.START);
+      }
+
+      long firstTimeUs;
+      long firstOffset;
+      long secondTimeUs = C.TIME_UNSET;
+      long secondOffset = C.INDEX_UNSET;
+
+      // Note that the id matches the index in tracks.
+      int mainTrackIndex = trackId != C.INDEX_UNSET ? trackId : firstVideoTrackIndex;
+      // If we have a video track, use it to establish one or two seek points.
+      if (mainTrackIndex != C.INDEX_UNSET) {
+        TrackSampleTable sampleTable = tracks[mainTrackIndex].sampleTable;
+        int sampleIndex = getSynchronizationSampleIndex(sampleTable, timeUs);
+        if (sampleIndex == C.INDEX_UNSET) {
+          return new SeekPoints(SeekPoint.START);
+        }
+        long sampleTimeUs = sampleTable.timestampsUs[sampleIndex];
+        firstTimeUs = sampleTimeUs;
+        firstOffset = sampleTable.offsets[sampleIndex];
+        if (sampleTimeUs < timeUs && sampleIndex < sampleTable.sampleCount - 1) {
+          int secondSampleIndex = sampleTable.getIndexOfLaterOrEqualSynchronizationSample(timeUs);
+          if (secondSampleIndex != C.INDEX_UNSET && secondSampleIndex != sampleIndex) {
+            secondTimeUs = sampleTable.timestampsUs[secondSampleIndex];
+            secondOffset = sampleTable.offsets[secondSampleIndex];
+          }
+        }
+      } else {
+        firstTimeUs = timeUs;
+        firstOffset = Long.MAX_VALUE;
+      }
+
+      if (trackId == C.INDEX_UNSET) {
+        // Take into account other tracks, but only if the caller has not specified a trackId.
+        for (int i = 0; i < tracks.length; i++) {
+          if (i != firstVideoTrackIndex) {
+            TrackSampleTable sampleTable = tracks[i].sampleTable;
+            firstOffset = maybeAdjustSeekOffset(sampleTable, firstTimeUs, firstOffset);
+            if (secondTimeUs != C.TIME_UNSET) {
+              secondOffset = maybeAdjustSeekOffset(sampleTable, secondTimeUs, secondOffset);
+            }
+          }
+        }
+      }
+
+      SeekPoint firstSeekPoint = new SeekPoint(firstTimeUs, firstOffset);
+      if (secondTimeUs == C.TIME_UNSET) {
+        return new SeekPoints(firstSeekPoint);
+      } else {
+        SeekPoint secondSeekPoint = new SeekPoint(secondTimeUs, secondOffset);
+        return new SeekPoints(firstSeekPoint, secondSeekPoint);
+      }
     }
   }
 }

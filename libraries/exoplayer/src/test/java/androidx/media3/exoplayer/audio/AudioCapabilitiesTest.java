@@ -17,9 +17,9 @@ package androidx.media3.exoplayer.audio;
 
 import static android.media.AudioFormat.CHANNEL_OUT_5POINT1;
 import static android.os.Build.VERSION.SDK_INT;
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.exoplayer.audio.AudioCapabilities.ALL_SURROUND_ENCODINGS_AND_MAX_CHANNELS;
 import static androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
 import static org.robolectric.Shadows.shadowOf;
 
@@ -139,7 +139,6 @@ public class AudioCapabilitiesTest {
         .isFalse();
   }
 
-  /** {@link AudioDeviceInfo#TYPE_BLUETOOTH_A2DP} is only supported from API 23. */
   @Test
   @Config(minSdk = Config.OLDEST_SDK)
   public void getCapabilities_withBluetoothA2dpAndHdmiConnected_returnsDefaultCapabilities() {
@@ -292,7 +291,7 @@ public class AudioCapabilitiesTest {
   }
 
   @Test
-  @Config(minSdk = Config.OLDEST_SDK) // TYPE_BLUETOOTH_A2DP detection is supported from API 23.
+  @Config(minSdk = Config.OLDEST_SDK)
   public void
       getCapabilities_withBluetoothA2dpConnectedAndHdmiAsRoutedDeviceHint_returnsHdmiCapabilities() {
     setOutputDevices(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_HDMI);

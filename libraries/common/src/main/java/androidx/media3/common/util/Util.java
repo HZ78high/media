@@ -33,12 +33,14 @@ import static androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT;
 import static androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM;
 import static androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS;
 import static androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM;
-import static androidx.media3.common.util.Assertions.checkArgument;
-import static androidx.media3.common.util.Assertions.checkNotNull;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.abs;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 
 import android.Manifest.permission;
 import android.annotation.SuppressLint;
@@ -99,6 +101,7 @@ import androidx.media3.common.Player.Commands;
 import androidx.media3.common.audio.AudioManagerCompat;
 import androidx.media3.common.audio.AudioProcessor;
 import com.google.common.base.Ascii;
+import com.google.common.base.Preconditions;
 import com.google.common.io.ByteStreams;
 import com.google.common.math.DoubleMath;
 import com.google.common.math.LongMath;
@@ -598,7 +601,7 @@ public final class Util {
   /**
    * Casts a nullable variable to a non-null variable without runtime null check.
    *
-   * <p>Use {@link Assertions#checkNotNull(Object)} to throw if the value is null.
+   * <p>Use {@link Preconditions#checkNotNull(Object)} to throw if the value is null.
    */
   @UnstableApi
   @SuppressWarnings({"nullness:contracts.postcondition", "nullness:return"})
@@ -692,7 +695,7 @@ public final class Util {
   @UnstableApi
   @SuppressWarnings("nullness:toArray.nullable.elements.not.newarray")
   public static <T> void nullSafeListToArray(List<T> list, T[] array) {
-    Assertions.checkState(list.size() == array.length);
+    checkState(list.size() == array.length);
     list.toArray(array);
   }
 
@@ -721,7 +724,7 @@ public final class Util {
   @UnstableApi
   public static Handler createHandlerForCurrentLooper(
       @Nullable Handler.@UnknownInitialization Callback callback) {
-    return createHandler(Assertions.checkStateNotNull(Looper.myLooper()), callback);
+    return createHandler(checkNotNull(Looper.myLooper()), callback);
   }
 
   /**
@@ -785,6 +788,29 @@ public final class Util {
    */
   @UnstableApi
   public static boolean postOrRun(Handler handler, Runnable runnable) {
+    Looper looper = handler.getLooper();
+    if (!looper.getThread().isAlive()) {
+      return false;
+    }
+    if (looper == Looper.myLooper()) {
+      runnable.run();
+      return true;
+    } else {
+      return handler.post(runnable);
+    }
+  }
+
+  /**
+   * Posts the {@link Runnable} if the calling thread differs with the {@link Looper} of the {@link
+   * HandlerWrapper}. Otherwise, runs the {@link Runnable} directly.
+   *
+   * @param handler The {@link HandlerWrapper} to which the {@link Runnable} will be posted.
+   * @param runnable The runnable to either post or run.
+   * @return {@code true} if the {@link Runnable} was successfully posted to the {@link
+   *     HandlerWrapper} or run. {@code false} otherwise.
+   */
+  @UnstableApi
+  public static boolean postOrRun(HandlerWrapper handler, Runnable runnable) {
     Looper looper = handler.getLooper();
     if (!looper.getThread().isAlive()) {
       return false;
@@ -1190,12 +1216,11 @@ public final class Util {
    */
   @UnstableApi
   public static long addWithOverflowDefault(long x, long y, long overflowResult) {
-    long result = x + y;
-    // See Hacker's Delight 2-13 (H. Warren Jr).
-    if (((x ^ result) & (y ^ result)) < 0) {
-      return overflowResult;
-    }
-    return result;
+    long result = LongMath.saturatedAdd(x, y);
+    return (result == Long.MIN_VALUE && x + y != Long.MIN_VALUE)
+            || (result == Long.MAX_VALUE && x + y != Long.MAX_VALUE)
+        ? overflowResult
+        : result;
   }
 
   /**
@@ -1208,17 +1233,19 @@ public final class Util {
    */
   @UnstableApi
   public static long subtractWithOverflowDefault(long x, long y, long overflowResult) {
-    long result = x - y;
-    // See Hacker's Delight 2-13 (H. Warren Jr).
-    if (((x ^ y) & (x ^ result)) < 0) {
-      return overflowResult;
-    }
-    return result;
+    long result = LongMath.saturatedSubtract(x, y);
+    return (result == Long.MIN_VALUE && x - y != Long.MIN_VALUE)
+            || (result == Long.MAX_VALUE && x - y != Long.MAX_VALUE)
+        ? overflowResult
+        : result;
   }
 
   /**
    * Returns the integer percentage of {@code numerator} divided by {@code denominator}. This uses
    * integer arithmetic (round down).
+   *
+   * <p>The result is cast from {@code long} to {@code int} following the rules of {@link
+   * Ints#saturatedCast(long)}.
    */
   @UnstableApi
   public static int percentInt(long numerator, long denominator) {
@@ -1227,7 +1254,7 @@ public final class Util {
         numeratorTimes100 != Long.MAX_VALUE && numeratorTimes100 != Long.MIN_VALUE
             ? numeratorTimes100 / denominator
             : (numerator / (denominator / 100));
-    return Ints.checkedCast(result);
+    return Ints.saturatedCast(result);
   }
 
   /**
@@ -2080,6 +2107,11 @@ public final class Util {
     return result.toString();
   }
 
+  @UnstableApi
+  public static String toFourccString(int fourcc) {
+    return new String(Ints.toByteArray(fourcc), US_ASCII);
+  }
+
   /**
    * Returns a user agent string based on the given application name and the library version.
    *
@@ -2326,6 +2358,38 @@ public final class Util {
         }
       case 12:
         return AudioFormat.CHANNEL_OUT_7POINT1POINT4;
+      case 13:
+        if (Build.VERSION.SDK_INT >= 32) {
+          // TODO(b/238402306): Replace with the public AudioFormat.CHANNEL_OUT_13POINT0 constant
+          // once it is released.
+          return AudioFormat.CHANNEL_OUT_FRONT_LEFT
+              | AudioFormat.CHANNEL_OUT_FRONT_CENTER
+              | AudioFormat.CHANNEL_OUT_FRONT_RIGHT
+              | AudioFormat.CHANNEL_OUT_SIDE_LEFT
+              | AudioFormat.CHANNEL_OUT_SIDE_RIGHT
+              | AudioFormat.CHANNEL_OUT_TOP_FRONT_LEFT
+              | AudioFormat.CHANNEL_OUT_TOP_FRONT_CENTER
+              | AudioFormat.CHANNEL_OUT_TOP_FRONT_RIGHT
+              | AudioFormat.CHANNEL_OUT_TOP_BACK_LEFT
+              | AudioFormat.CHANNEL_OUT_TOP_BACK_RIGHT
+              | AudioFormat.CHANNEL_OUT_BOTTOM_FRONT_LEFT
+              | AudioFormat.CHANNEL_OUT_BOTTOM_FRONT_CENTER
+              | AudioFormat.CHANNEL_OUT_BOTTOM_FRONT_RIGHT;
+        } else {
+          return AudioFormat.CHANNEL_INVALID;
+        }
+      case 14:
+        if (Build.VERSION.SDK_INT >= 32) {
+          return AudioFormat.CHANNEL_OUT_9POINT1POINT4;
+        } else {
+          return AudioFormat.CHANNEL_INVALID;
+        }
+      case 16:
+        if (Build.VERSION.SDK_INT >= 32) {
+          return AudioFormat.CHANNEL_OUT_9POINT1POINT6;
+        } else {
+          return AudioFormat.CHANNEL_INVALID;
+        }
       case 24:
         if (Build.VERSION.SDK_INT >= 32) {
           return AudioFormat.CHANNEL_OUT_7POINT1POINT4
@@ -2527,14 +2591,15 @@ public final class Util {
   }
 
   /**
-   * Returns a newly generated audio session identifier, or {@link AudioManager#ERROR} if an error
-   * occurred in which case audio playback may fail.
+   * Returns a newly generated audio session identifier, or {@link C#AUDIO_SESSION_ID_UNSET} if
+   * failed to generate an identifier and in which case audio playback may fail.
    *
    * @see AudioManager#generateAudioSessionId()
    */
   @UnstableApi
   public static int generateAudioSessionIdV21(Context context) {
-    return AudioManagerCompat.getAudioManager(context).generateAudioSessionId();
+    int audioSessionId = AudioManagerCompat.getAudioManager(context).generateAudioSessionId();
+    return audioSessionId != AudioManager.ERROR ? audioSessionId : C.AUDIO_SESSION_ID_UNSET;
   }
 
   /**
@@ -3510,7 +3575,8 @@ public final class Util {
   public static void putInt24(ByteBuffer buffer, int value) {
     checkArgument(
         (value & ~0xffffff) == 0 || (value & ~0x7fffff) == 0xff800000,
-        "Value out of range of 24-bit integer: " + Integer.toHexString(value));
+        "Value out of range of 24-bit integer: %s",
+        Integer.toHexString(value));
     checkArgument(buffer.remaining() >= 3);
     byte component1 =
         buffer.order() == ByteOrder.BIG_ENDIAN
@@ -3719,7 +3785,7 @@ public final class Util {
    * Returns a {@link Drawable} for the given resource or throws a {@link
    * Resources.NotFoundException} if not found.
    *
-   * @param context The context to get the theme from starting with API 21.
+   * @param context The context to get the theme from.
    * @param resources The resources to load the drawable from.
    * @param drawableRes The drawable resource int.
    * @return The loaded {@link Drawable}.

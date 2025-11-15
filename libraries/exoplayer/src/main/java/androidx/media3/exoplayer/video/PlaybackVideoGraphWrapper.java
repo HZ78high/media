@@ -16,13 +16,13 @@
 package androidx.media3.exoplayer.video;
 
 import static android.os.Build.VERSION.SDK_INT;
+import static androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP;
 import static androidx.media3.common.VideoFrameProcessor.DROP_OUTPUT_FRAME;
-import static androidx.media3.common.util.Assertions.checkNotNull;
-import static androidx.media3.common.util.Assertions.checkState;
-import static androidx.media3.common.util.Assertions.checkStateNotNull;
 import static androidx.media3.common.util.Util.contains;
 import static androidx.media3.common.util.Util.getMaxPendingFramesCountForMediaCodecDecoders;
 import static androidx.media3.exoplayer.video.VideoSink.INPUT_TYPE_SURFACE;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
 import android.content.Context;
@@ -35,7 +35,6 @@ import androidx.annotation.FloatRange;
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
-import androidx.annotation.RestrictTo.Scope;
 import androidx.media3.common.C;
 import androidx.media3.common.ColorInfo;
 import androidx.media3.common.DebugViewProvider;
@@ -55,7 +54,6 @@ import androidx.media3.common.util.Log;
 import androidx.media3.common.util.Size;
 import androidx.media3.common.util.TimedValueQueue;
 import androidx.media3.common.util.TimestampIterator;
-import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.util.Util;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
@@ -75,8 +73,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  * Processes input from {@link VideoSink} instances, plumbing the data through a {@link VideoGraph}
  * and rendering the output.
  */
-@UnstableApi
-@RestrictTo({Scope.LIBRARY_GROUP})
+@RestrictTo(LIBRARY_GROUP)
 public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
 
   /** Listener for {@link PlaybackVideoGraphWrapper} events. */
@@ -335,7 +332,7 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
   private PlaybackVideoGraphWrapper(Builder builder) {
     context = builder.context;
     pendingStreamChanges = new TimedValueQueue<>();
-    videoGraphFactory = checkStateNotNull(builder.videoGraphFactory);
+    videoGraphFactory = checkNotNull(builder.videoGraphFactory);
     inputVideoSinks = new SparseArray<>();
     compositionEffects = ImmutableList.of();
     compositorSettings = VideoCompositorSettings.DEFAULT;
@@ -353,12 +350,12 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
         new VideoSink.VideoFrameHandler() {
           @Override
           public void render(long renderTimestampNs) {
-            checkStateNotNull(videoGraph).renderOutputFrame(renderTimestampNs);
+            checkNotNull(videoGraph).renderOutputFrame(renderTimestampNs);
           }
 
           @Override
           public void skip() {
-            checkStateNotNull(videoGraph).renderOutputFrame(DROP_OUTPUT_FRAME);
+            checkNotNull(videoGraph).renderOutputFrame(DROP_OUTPUT_FRAME);
           }
         };
     listeners = new CopyOnWriteArraySet<>();
@@ -389,6 +386,12 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
   }
 
   public void setTotalVideoInputCount(int totalVideoInputCount) {
+    if (totalVideoInputCount < this.totalVideoInputCount) {
+      // Currently we don't allow removing video from a sequence.
+      // TODO: b/430250222 - Track types should be fixed after this, and this method could be
+      //  removed.
+      return;
+    }
     this.totalVideoInputCount = totalVideoInputCount;
   }
 
@@ -580,13 +583,16 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
                   "Color transfer %d is not supported. Falling back to OpenGl tone mapping.",
                   inputColorInfo.colorTransfer));
           outputColorInfo = ColorInfo.SDR_BT709_LIMITED;
+        } else if (inputColorInfo.colorTransfer == C.COLOR_TRANSFER_SRGB
+            || inputColorInfo.colorTransfer == C.COLOR_TRANSFER_GAMMA_2_2) {
+          outputColorInfo = ColorInfo.SDR_BT709_LIMITED;
         } else {
           outputColorInfo = inputColorInfo;
         }
       } catch (GlException e) {
         throw new VideoSink.VideoSinkException(e, sourceFormat);
       }
-      handler = clock.createHandler(checkStateNotNull(Looper.myLooper()), /* callback= */ null);
+      handler = clock.createHandler(checkNotNull(Looper.myLooper()), /* callback= */ null);
       try {
         // TODO: b/412585856 - Allow setting CompositorSetting and CompositionEffects dynamically.
         videoGraph =
@@ -694,7 +700,7 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
     hasSignaledEndOfVideoGraphOutputStream = false;
     // Handle pending video graph callbacks to ensure video size changes reach the video render
     // control.
-    checkStateNotNull(handler).post(() -> pendingFlushCount--);
+    checkNotNull(handler).post(() -> pendingFlushCount--);
   }
 
   private void joinPlayback(boolean renderNextFrameImmediately) {
@@ -1125,7 +1131,7 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
           () ->
               currentListener.onError(
                   new VideoSinkException(
-                      videoFrameProcessingException, checkStateNotNull(this.inputFormat))));
+                      videoFrameProcessingException, checkNotNull(this.inputFormat))));
     }
 
     // Private methods

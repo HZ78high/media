@@ -16,17 +16,15 @@
 package androidx.media3.session.legacy;
 
 import static androidx.annotation.RestrictTo.Scope.LIBRARY;
-import static androidx.media3.common.util.Assertions.checkNotNull;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
-import androidx.media3.common.util.UnstableApi;
 
 /**
  * Callback interface for a MediaSessionCompat to send updates to a MediaControllerCompat. This is
  * only used on pre-Lollipop systems.
  */
-@UnstableApi
 @RestrictTo(LIBRARY)
 public interface IMediaControllerCallback extends android.os.IInterface {
   /** Local-side IPC implementation stub class. */

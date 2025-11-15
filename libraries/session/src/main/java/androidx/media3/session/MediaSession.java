@@ -17,11 +17,11 @@ package androidx.media3.session;
 
 import static android.os.Build.VERSION.SDK_INT;
 import static androidx.annotation.VisibleForTesting.PRIVATE;
-import static androidx.media3.common.util.Assertions.checkArgument;
-import static androidx.media3.common.util.Assertions.checkNotNull;
-import static androidx.media3.common.util.Assertions.checkState;
 import static androidx.media3.session.SessionError.ERROR_NOT_SUPPORTED;
 import static androidx.media3.session.SessionResult.RESULT_SUCCESS;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 
 import android.app.PendingIntent;
 import android.content.Context;
@@ -71,6 +71,7 @@ import com.google.errorprone.annotations.DoNotMock;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
+import org.checkerframework.checker.nullness.qual.EnsuresNonNull;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 /**
@@ -246,6 +247,8 @@ public class MediaSession {
    * thread of the underlying {@link Player}.
    */
   public static final class Builder extends BuilderBase<MediaSession, Builder, Callback> {
+
+    private boolean useLegacySurfaceHandling;
 
     /**
      * Creates a builder for {@link MediaSession}.
@@ -474,6 +477,25 @@ public class MediaSession {
     }
 
     /**
+     * Sets whether to use the legacy surface handling logic by ignoring the surface size.
+     *
+     * <p>When set to {@code true}, the session will call {@link Player#setVideoSurface(Surface)}
+     * directly, which may not work correctly with video effects. This is intended as a temporary
+     * opt-out for applications that experience issues with the new SurfaceHolder-based approach.
+     *
+     * <p>This method is experimental and may be removed in a future release.
+     *
+     * @param useLegacySurfaceHandling Whether to use the legacy surface handling logic.
+     * @return This builder.
+     */
+    @CanIgnoreReturnValue
+    @UnstableApi
+    public Builder setExperimentalSetUseLegacySurfaceHandling(boolean useLegacySurfaceHandling) {
+      this.useLegacySurfaceHandling = useLegacySurfaceHandling;
+      return this;
+    }
+
+    /**
      * Builds a {@link MediaSession}.
      *
      * @return A new session.
@@ -482,9 +504,7 @@ public class MediaSession {
      */
     @Override
     public MediaSession build() {
-      if (bitmapLoader == null) {
-        bitmapLoader = new CacheBitmapLoader(new DataSourceBitmapLoader(context));
-      }
+      ensureBitmapLoaderIsSizeLimited();
       return new MediaSession(
           context,
           id,
@@ -496,10 +516,11 @@ public class MediaSession {
           callback,
           tokenExtras,
           sessionExtras,
-          checkNotNull(bitmapLoader),
+          bitmapLoader,
           playIfSuppressed,
           isPeriodicPositionUpdateEnabled,
-          MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_NONE);
+          MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_NONE,
+          useLegacySurfaceHandling);
     }
   }
 
@@ -753,7 +774,8 @@ public class MediaSession {
       BitmapLoader bitmapLoader,
       boolean playIfSuppressed,
       boolean isPeriodicPositionUpdateEnabled,
-      @MediaLibrarySession.LibraryErrorReplicationMode int libraryErrorReplicationMode) {
+      @MediaLibrarySession.LibraryErrorReplicationMode int libraryErrorReplicationMode,
+      boolean useLegacySurfaceHandling) {
     synchronized (STATIC_LOCK) {
       if (SESSION_ID_TO_SESSION_MAP.containsKey(id)) {
         throw new IllegalStateException("Session ID must be unique. ID=" + id);
@@ -775,7 +797,8 @@ public class MediaSession {
             bitmapLoader,
             playIfSuppressed,
             isPeriodicPositionUpdateEnabled,
-            libraryErrorReplicationMode);
+            libraryErrorReplicationMode,
+            useLegacySurfaceHandling);
   }
 
   /* package */ MediaSessionImpl createImpl(
@@ -792,7 +815,8 @@ public class MediaSession {
       BitmapLoader bitmapLoader,
       boolean playIfSuppressed,
       boolean isPeriodicPositionUpdateEnabled,
-      @MediaLibrarySession.LibraryErrorReplicationMode int libraryErrorReplicationMode) {
+      @MediaLibrarySession.LibraryErrorReplicationMode int libraryErrorReplicationMode,
+      boolean useLegacySurfaceHandling) {
     return new MediaSessionImpl(
         this,
         context,
@@ -807,11 +831,23 @@ public class MediaSession {
         sessionExtras,
         bitmapLoader,
         playIfSuppressed,
-        isPeriodicPositionUpdateEnabled);
+        isPeriodicPositionUpdateEnabled,
+        useLegacySurfaceHandling);
   }
 
   /* package */ MediaSessionImpl getImpl() {
     return impl;
+  }
+
+  /**
+   * Returns the bitmap dimension limit in pixels. Bitmaps with width or height larger than this
+   * will be scaled down to fit within the limit.
+   *
+   * @param context The context in which the bitmap dimension limit is defined.
+   * @return The bitmap dimension limit in pixels.
+   */
+  public static int getBitmapDimensionLimit(Context context) {
+    return MediaSessionImpl.getBitmapDimensionLimit(context);
   }
 
   @Nullable
@@ -2383,6 +2419,8 @@ public class MediaSession {
 
     default void onVolumeChanged(int seq, float volume) throws RemoteException {}
 
+    default void onAudioSessionIdChanged(int seq, int audioSessionId) throws RemoteException {}
+
     default void onAudioAttributesChanged(int seq, AudioAttributes audioAttributes)
         throws RemoteException {}
 
@@ -2392,6 +2430,8 @@ public class MediaSession {
 
     default void onMediaMetadataChanged(int seq, MediaMetadata mediaMetadata)
         throws RemoteException {}
+
+    default void onSurfaceSizeChanged(int seq, int width, int height) throws RemoteException {}
 
     default void onRenderedFirstFrame(int seq) throws RemoteException {}
 
@@ -2542,6 +2582,23 @@ public class MediaSession {
     }
 
     public abstract SessionT build();
+
+    /** Updates bitmap loader to ensure its using the maximum media session size limit. */
+    @EnsuresNonNull("bitmapLoader")
+    protected final void ensureBitmapLoaderIsSizeLimited() {
+      int dimensionLimit = MediaSession.getBitmapDimensionLimit(context);
+      if (bitmapLoader == null) {
+        bitmapLoader =
+            new CacheBitmapLoader(
+                new DataSourceBitmapLoader.Builder(context)
+                    .setMaximumOutputDimension(dimensionLimit)
+                    .setMakeShared(true)
+                    .build());
+      } else {
+        bitmapLoader =
+            new SizeLimitedBitmapLoader(bitmapLoader, dimensionLimit, /* makeShared= */ true);
+      }
+    }
   }
 
   @RequiresApi(31)

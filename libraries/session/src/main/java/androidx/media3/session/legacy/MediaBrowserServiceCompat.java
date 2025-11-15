@@ -16,7 +16,6 @@
 package androidx.media3.session.legacy;
 
 import static androidx.annotation.RestrictTo.Scope.LIBRARY;
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_ADD_SUBSCRIPTION;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_GET_MEDIA_ITEM;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_REGISTER_CALLBACK_MESSENGER;
@@ -48,6 +47,7 @@ import static androidx.media3.session.legacy.MediaBrowserProtocol.SERVICE_VERSIO
 import static androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo.LEGACY_CONTROLLER;
 import static androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo.UNKNOWN_PID;
 import static androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo.UNKNOWN_UID;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 import android.annotation.SuppressLint;
 import android.app.Service;
@@ -76,7 +76,6 @@ import androidx.annotation.RestrictTo;
 import androidx.collection.ArrayMap;
 import androidx.core.util.Pair;
 import androidx.media3.common.util.NullableType;
-import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.util.Util;
 import androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo;
 import java.io.FileDescriptor;
@@ -117,7 +116,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  * <p>For information about building your media application, read the <a
  * href="{@docRoot}guide/topics/media-apps/index.html">Media Apps</a> developer guide. </div>
  */
-@UnstableApi
 @RestrictTo(LIBRARY)
 public abstract class MediaBrowserServiceCompat extends Service {
   static final String TAG = "MBServiceCompat";
@@ -1310,7 +1308,7 @@ public abstract class MediaBrowserServiceCompat extends Service {
    * of this bundle may affect the information returned when browsing.
    *
    * <p>Note that this will return null when connected to {@link android.media.browse.MediaBrowser}
-   * and running on API 23 or lower.
+   * and running on API 23.
    *
    * @throws IllegalStateException If this method is called outside of {@link #onLoadChildren},
    *     {@link #onLoadItem} or {@link #onSearch}.

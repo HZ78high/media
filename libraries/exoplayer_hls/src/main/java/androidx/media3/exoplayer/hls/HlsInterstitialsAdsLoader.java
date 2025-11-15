@@ -16,6 +16,9 @@
 package androidx.media3.exoplayer.hls;
 
 import static androidx.media3.common.AdPlaybackState.AD_STATE_AVAILABLE;
+import static androidx.media3.common.AdPlaybackState.AD_STATE_ERROR;
+import static androidx.media3.common.AdPlaybackState.AD_STATE_PLAYED;
+import static androidx.media3.common.AdPlaybackState.AD_STATE_SKIPPED;
 import static androidx.media3.common.AdPlaybackState.AD_STATE_UNAVAILABLE;
 import static androidx.media3.common.Player.DISCONTINUITY_REASON_AUTO_TRANSITION;
 import static androidx.media3.common.Player.DISCONTINUITY_REASON_REMOVE;
@@ -23,10 +26,6 @@ import static androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK;
 import static androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT;
 import static androidx.media3.common.Player.DISCONTINUITY_REASON_SKIP;
 import static androidx.media3.common.Player.STATE_IDLE;
-import static androidx.media3.common.util.Assertions.checkArgument;
-import static androidx.media3.common.util.Assertions.checkNotNull;
-import static androidx.media3.common.util.Assertions.checkState;
-import static androidx.media3.common.util.Assertions.checkStateNotNull;
 import static androidx.media3.common.util.Util.castNonNull;
 import static androidx.media3.common.util.Util.msToUs;
 import static androidx.media3.common.util.Util.usToMs;
@@ -34,16 +33,21 @@ import static androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist.Interstiti
 import static androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist.Interstitial.CUE_TRIGGER_PRE;
 import static androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist.Interstitial.SNAP_TYPE_IN;
 import static androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist.Interstitial.SNAP_TYPE_OUT;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.abs;
 import static java.lang.Math.max;
-import static java.lang.Math.min;
 
 import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Looper;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.AdPlaybackState;
+import androidx.media3.common.AdPlaybackState.AdGroup;
+import androidx.media3.common.AdPlaybackState.SkipInfo;
 import androidx.media3.common.AdViewProvider;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -97,7 +101,7 @@ import java.util.TreeMap;
  * ads media sources}. These ad media source can be added to the same playlist as far as each of the
  * sources have a different ads IDs.
  */
-@SuppressWarnings("PatternMatchingInstanceof")
+@SuppressWarnings({"PatternMatchingInstanceof", "EffectivelyPrivate"})
 @UnstableApi
 public final class HlsInterstitialsAdsLoader implements AdsLoader {
 
@@ -105,7 +109,7 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
   public static final class AssetList {
 
     /* package */ static final AssetList EMPTY =
-        new AssetList(ImmutableList.of(), ImmutableList.of(), /* skipControl= */ null);
+        new AssetList(ImmutableList.of(), ImmutableList.of(), /* skipInfo= */ null);
 
     /** The list of assets. */
     public final ImmutableList<Asset> assets;
@@ -114,16 +118,16 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
     public final ImmutableList<StringAttribute> stringAttributes;
 
     /** The skip control information, or {@code null} if not specified. */
-    @Nullable public final SkipControl skipControl;
+    @Nullable public final SkipInfo skipInfo;
 
     /** Creates an instance. */
     /* package */ AssetList(
         ImmutableList<Asset> assets,
         ImmutableList<StringAttribute> stringAttributes,
-        @Nullable SkipControl skipControl) {
+        @Nullable SkipInfo skipInfo) {
       this.assets = assets;
       this.stringAttributes = stringAttributes;
-      this.skipControl = skipControl;
+      this.skipInfo = skipInfo;
     }
 
     @Override
@@ -137,12 +141,12 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
       AssetList assetList = (AssetList) o;
       return Objects.equals(assets, assetList.assets)
           && Objects.equals(stringAttributes, assetList.stringAttributes)
-          && Objects.equals(skipControl, assetList.skipControl);
+          && Objects.equals(skipInfo, assetList.skipInfo);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(assets, stringAttributes, skipControl);
+      return Objects.hash(assets, stringAttributes, skipInfo);
     }
   }
 
@@ -213,49 +217,6 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
     @Override
     public int hashCode() {
       return Objects.hash(name, value);
-    }
-  }
-
-  /**
-   * Holds skip control information for an asset list.
-   *
-   * <p>See RFC 8216bis, appendix D.3, SKIP-CONTROL.
-   */
-  public static final class SkipControl {
-
-    /** The offset, in microseconds. */
-    public final long offsetUs;
-
-    /** The duration, in microseconds. */
-    public final long durationUs;
-
-    /** The label ID. */
-    @Nullable public final String labelId;
-
-    /** Creates an instance. */
-    /* package */ SkipControl(long offsetUs, long durationUs, @Nullable String labelId) {
-      this.offsetUs = offsetUs;
-      this.durationUs = durationUs;
-      this.labelId = labelId;
-    }
-
-    @Override
-    public boolean equals(@Nullable Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (!(o instanceof SkipControl)) {
-        return false;
-      }
-      SkipControl that = (SkipControl) o;
-      return offsetUs == that.offsetUs
-          && durationUs == that.durationUs
-          && Objects.equals(labelId, that.labelId);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(offsetUs, durationUs, labelId);
     }
   }
 
@@ -755,6 +716,189 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
     resumptionStates.clear();
   }
 
+  /**
+   * Skips the ad currently being played.
+   *
+   * <p>Does nothing if no ad is playing or the ad is not managed by this ads loader.
+   */
+  public void skipCurrentAd() {
+    checkNotNull(this.player);
+    if (!player.isPlayingAd()) {
+      return;
+    }
+    setWithSkippedAd(player.getCurrentAdGroupIndex(), player.getCurrentAdIndexInAdGroup());
+  }
+
+  /**
+   * Skips the ad group of the ad currently being played.
+   *
+   * <p>Does nothing if no ad is playing or the ad is not managed by this ads loader.
+   */
+  public void skipCurrentAdGroup() {
+    checkNotNull(this.player);
+    if (!player.isPlayingAd()) {
+      return;
+    }
+    setWithSkippedAdGroup(player.getCurrentAdGroupIndex());
+  }
+
+  /**
+   * Sets the given ad to {@link AdPlaybackState#AD_STATE_SKIPPED}.
+   *
+   * <p>Ads that are already in state {@link AdPlaybackState#AD_STATE_PLAYED}, {@link
+   * AdPlaybackState#AD_STATE_SKIPPED} or {@link AdPlaybackState#AD_STATE_ERROR} are left unchanged.
+   *
+   * @param adGroupIndex The index of the ad group in the ad playback state.
+   * @param adIndexInAdGroup The index of the ad in the ad group in the ad playback state.
+   * @throws IllegalArgumentException if there is no ad group or ad available for the given indices.
+   * @throws IllegalStateException if called when the player {@linkplain #setPlayer(Player) is not
+   *     set}.
+   */
+  public void setWithSkippedAd(int adGroupIndex, int adIndexInAdGroup) {
+    checkState(this.player != null);
+    AdPlaybackState adPlaybackState = getAdPlaybackState();
+    if (adPlaybackState != null) {
+      checkArgument(adGroupIndex < adPlaybackState.adGroupCount);
+      AdGroup adGroup = adPlaybackState.getAdGroup(adGroupIndex);
+      checkArgument(adIndexInAdGroup < adGroup.count);
+      if (adGroup.states[adIndexInAdGroup] == AD_STATE_PLAYED
+          || adGroup.states[adIndexInAdGroup] == AD_STATE_ERROR) {
+        Log.w(
+            TAG,
+            "ignoring request to set ad for state AD_STATE_SKIPPED for played or failed ad "
+                + "at adGroupIndex="
+                + adGroupIndex
+                + ", adIndexInAgGroup="
+                + adIndexInAdGroup);
+        return;
+      }
+      if (adGroup.states[adIndexInAdGroup] != AD_STATE_SKIPPED) {
+        adPlaybackState = adPlaybackState.withSkippedAd(adGroupIndex, adIndexInAdGroup);
+        putAndNotifyAdPlaybackStateUpdate(checkNotNull(adPlaybackState.adsId), adPlaybackState);
+        removeUnresolvedAssetListOfAdGroup(adPlaybackState, adGroup);
+      }
+    }
+  }
+
+  /**
+   * Sets the given ad group to {@link AdPlaybackState#AD_STATE_SKIPPED}.
+   *
+   * <p>Ads that are already in state {@link AdPlaybackState#AD_STATE_PLAYED}, {@link
+   * AdPlaybackState#AD_STATE_SKIPPED} or {@link AdPlaybackState#AD_STATE_ERROR} are left unchanged.
+   *
+   * @param adGroupIndex The index of the ad group in the ad playback state.
+   * @throws IllegalArgumentException if there is no ad group available for the given index.
+   * @throws IllegalStateException if called when the player {@linkplain #setPlayer(Player) is not
+   *     set}.
+   */
+  public void setWithSkippedAdGroup(int adGroupIndex) {
+    checkState(this.player != null);
+    AdPlaybackState adPlaybackState = getAdPlaybackState();
+    if (adPlaybackState != null) {
+      checkArgument(adGroupIndex < adPlaybackState.adGroupCount);
+      adPlaybackState = adPlaybackState.withSkippedAdGroup(adGroupIndex);
+      AdGroup adGroup = adPlaybackState.getAdGroup(adGroupIndex);
+      putAndNotifyAdPlaybackStateUpdate(checkNotNull(adPlaybackState.adsId), adPlaybackState);
+      removeUnresolvedAssetListOfAdGroup(adPlaybackState, adGroup);
+    }
+  }
+
+  /**
+   * Sets the given ad to {@link AdPlaybackState#AD_STATE_AVAILABLE}.
+   *
+   * @param adGroupIndex The index of the ad group in the ad playback state.
+   * @param adIndexInAdGroup The index of the ad in the ad group in the ad playback state.
+   * @param mediaItem The optional media item. If not set the same ad media item is played again.
+   * @throws IllegalArgumentException if there is no ad group or ad available for the given indices
+   *     or if the provided {@link MediaItem} is not an HLS media item.
+   * @throws IllegalStateException if the media item that was passed in is null, and the given ad
+   *     doesn't have a media item set already, or if called when the player {@linkplain
+   *     #setPlayer(Player) is not set}.
+   */
+  public void setWithAvailableAdMediaItem(
+      int adGroupIndex, int adIndexInAdGroup, @Nullable MediaItem mediaItem) {
+    checkState(this.player != null);
+    if (mediaItem != null) {
+      checkArgument(isHlsMediaItem(mediaItem));
+    }
+    AdPlaybackState adPlaybackState = getAdPlaybackState();
+    if (adPlaybackState != null) {
+      checkArgument(adGroupIndex < adPlaybackState.adGroupCount);
+      AdGroup adGroup = adPlaybackState.getAdGroup(adGroupIndex);
+      checkArgument(adIndexInAdGroup < adGroup.count);
+      if (mediaItem == null) {
+        mediaItem = adGroup.mediaItems[adIndexInAdGroup];
+        checkState(mediaItem != null);
+      }
+      if (adGroup.states[adIndexInAdGroup] != AD_STATE_AVAILABLE) {
+        adPlaybackState =
+            adPlaybackState.withAvailableAdMediaItem(adGroupIndex, adIndexInAdGroup, mediaItem);
+        putAndNotifyAdPlaybackStateUpdate(checkNotNull(adPlaybackState.adsId), adPlaybackState);
+        removeUnresolvedAssetListOfAdGroup(adPlaybackState, adGroup);
+      }
+    }
+  }
+
+  /**
+   * Sets the given ad group to {@link AdPlaybackState#AD_STATE_AVAILABLE}. Ads that are in state
+   * {@link AdPlaybackState#AD_STATE_UNAVAILABLE} or {@link AdPlaybackState#AD_STATE_ERROR} are left
+   * unchanged.
+   *
+   * @param adGroupIndex The index of the ad group in the ad playback state.
+   * @throws IllegalArgumentException if there is no ad group available for the given index.
+   * @throws IllegalStateException if called when the player {@linkplain #setPlayer(Player) is not
+   *     set} or if any ad in the group doesn't have a media item for the ad stream assigned.
+   */
+  public void setWithAvailableAdGroup(int adGroupIndex) {
+    checkState(this.player != null);
+    AdPlaybackState adPlaybackState = getAdPlaybackState();
+    if (adPlaybackState != null) {
+      checkArgument(adGroupIndex < adPlaybackState.adGroupCount);
+      AdGroup adGroup = adPlaybackState.getAdGroup(adGroupIndex);
+      for (int adIndexInAdGroup = 0; adIndexInAdGroup < adGroup.states.length; adIndexInAdGroup++) {
+        if ((adGroup.states[adIndexInAdGroup] == AD_STATE_PLAYED
+                || adGroup.states[adIndexInAdGroup] == AD_STATE_SKIPPED)
+            && adGroup.mediaItems[adIndexInAdGroup] != null) {
+          @Nullable MediaItem mediaItem = adGroup.mediaItems[adIndexInAdGroup];
+          checkState(mediaItem != null);
+          adPlaybackState =
+              adPlaybackState.withAvailableAdMediaItem(adGroupIndex, adIndexInAdGroup, mediaItem);
+        }
+      }
+      putAndNotifyAdPlaybackStateUpdate(checkNotNull(adPlaybackState.adsId), adPlaybackState);
+      removeUnresolvedAssetListOfAdGroup(adPlaybackState, adGroup);
+    }
+  }
+
+  private void removeUnresolvedAssetListOfAdGroup(
+      AdPlaybackState adPlaybackState, AdGroup adGroup) {
+    checkArgument(adPlaybackState.adsId != null);
+    Map<Long, AssetListData> unresolvedAssetLists =
+        contentMediaSourceAdDataHolder.getUnresolvedAssetLists(adPlaybackState.adsId);
+    if (unresolvedAssetLists != null) {
+      // remove unresolved asset list when the user manually manipulates the ad group.
+      unresolvedAssetLists.remove(
+          adGroup.timeUs == C.TIME_END_OF_SOURCE ? Long.MAX_VALUE : adGroup.timeUs);
+    }
+  }
+
+  @Nullable
+  private AdPlaybackState getAdPlaybackState() {
+    if (player == null) {
+      return null;
+    }
+    Player player = this.player;
+    Timeline timeline = player.getCurrentTimeline();
+    if (timeline.isEmpty()) {
+      return null;
+    }
+    int periodIndex = player.getCurrentPeriodIndex();
+    Period period = timeline.getPeriod(periodIndex, new Period());
+    return period.adPlaybackState.adsId != null
+        ? contentMediaSourceAdDataHolder.getAdPlaybackState(period.adPlaybackState.adsId)
+        : null;
+  }
+
   @Override
   public void start(
       AdsMediaSource adsMediaSource,
@@ -775,7 +919,7 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
     }
     if (contentMediaSourceAdDataHolder.isIdle()) {
       // Set the player listener when the first ad starts.
-      checkStateNotNull(player, "setPlayer(Player) needs to be called").addListener(playerListener);
+      checkNotNull(player, "setPlayer(Player) needs to be called").addListener(playerListener);
     }
     contentMediaSourceAdDataHolder.startContentSource(adsId, eventListener);
     MediaItem mediaItem = adsMediaSource.getMediaItem();
@@ -958,6 +1102,15 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
       loader = null;
     }
     isReleased = true;
+  }
+
+  /**
+   * Returns whether {@link #release()} has been called.
+   *
+   * @return True if {@link #release()} has been called, false otherwise.
+   */
+  public boolean isReleased() {
+    return isReleased;
   }
 
   // private methods
@@ -1281,6 +1434,21 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
             .withAdId(adGroupIndex, adIndexInAdGroup, interstitial.id)
             .withAdDurationsUs(adGroupIndex, adDurations)
             .withContentResumeOffsetUs(adGroupIndex, resumeOffsetUs);
+    if (interstitial.skipControlDurationUs != C.TIME_UNSET
+        || interstitial.skipControlOffsetUs != C.TIME_UNSET
+        || interstitial.skipControlLabelId != null) {
+      // if any of the skip control properties is set, then we consider the interstitials as
+      // skippable by applying the default values of the other properties defined in the spec.
+      adPlaybackState =
+          adPlaybackState.withAdSkipInfo(
+              adGroupIndex,
+              adIndexInAdGroup,
+              new SkipInfo(
+                  interstitial.skipControlOffsetUs,
+                  interstitial.skipControlDurationUs,
+                  interstitial.skipControlLabelId));
+    }
+
     if (interstitial.assetUri != null) {
       adPlaybackState =
           adPlaybackState.withAvailableAdMediaItem(
@@ -1355,18 +1523,41 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
     }
   }
 
-  private static long getClosestSegmentBoundaryUs(long unixTimeUs, HlsMediaPlaylist mediaPlaylist) {
+  @VisibleForTesting
+  /* package */ static long getClosestSegmentBoundaryUs(
+      long unixTimeUs, HlsMediaPlaylist mediaPlaylist) {
     long positionInPlaylistUs = unixTimeUs - mediaPlaylist.startTimeUs;
     if (positionInPlaylistUs <= 0 || mediaPlaylist.segments.isEmpty()) {
       return mediaPlaylist.startTimeUs;
     } else if (positionInPlaylistUs >= mediaPlaylist.durationUs) {
       return mediaPlaylist.startTimeUs + mediaPlaylist.durationUs;
     }
-    long segmentIndex =
-        min(
-            positionInPlaylistUs / mediaPlaylist.targetDurationUs,
-            mediaPlaylist.segments.size() - 1);
-    HlsMediaPlaylist.Segment segment = mediaPlaylist.segments.get((int) segmentIndex);
+
+    // Binary search to find the segment containing or closest to the position
+    int left = 0;
+    int right = mediaPlaylist.segments.size() - 1;
+    int closestIndex = 0;
+
+    while (left <= right) {
+      int mid = left + (right - left) / 2;
+      HlsMediaPlaylist.Segment midSegment = mediaPlaylist.segments.get(mid);
+      long segmentStart = midSegment.relativeStartTimeUs;
+      long segmentEnd = segmentStart + midSegment.durationUs;
+
+      if (positionInPlaylistUs >= segmentStart && positionInPlaylistUs <= segmentEnd) {
+        // Position is within this segment
+        closestIndex = mid;
+        break;
+      } else if (positionInPlaylistUs < segmentStart) {
+        closestIndex = mid;
+        right = mid - 1;
+      } else {
+        closestIndex = mid;
+        left = mid + 1;
+      }
+    }
+
+    HlsMediaPlaylist.Segment segment = mediaPlaylist.segments.get(closestIndex);
     return positionInPlaylistUs - segment.relativeStartTimeUs
             < abs(positionInPlaylistUs - (segment.relativeStartTimeUs + segment.durationUs))
         ? mediaPlaylist.startTimeUs + segment.relativeStartTimeUs
@@ -1613,13 +1804,33 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
       @Nullable AssetList assetList = loadable.getResult();
       AdPlaybackState adPlaybackState =
           contentMediaSourceAdDataHolder.getAdPlaybackState(assetListData.adsId);
-      if (adPlaybackState == null || assetList == null || assetList.assets.isEmpty()) {
-        if (adPlaybackState != null) {
-          handleAssetResolutionFailed(new IOException("empty asset list"), /* cancelled= */ false);
-        }
+      // Get the state of the ad to validate there was no manual change since we started loading.
+      int assetListAdState =
+          adPlaybackState != null
+              ? adPlaybackState.getAdGroup(assetListData.adGroupIndex)
+                  .states[assetListData.adIndexInAdGroup]
+              : AD_STATE_ERROR;
+      if (assetListAdState != AD_STATE_UNAVAILABLE) {
+        // The ad was manipulated manually since the asset loading was started. Ignore asset list
+        // and make sure the next asset list is scheduled for loading (if any).
+        maybeContinueAssetResolution();
+        notifyListeners(
+            listener ->
+                listener.onAssetListLoadFailed(
+                    assetListData.mediaItem,
+                    assetListData.adsId,
+                    assetListData.adGroupIndex,
+                    assetListData.adIndexInAdGroup,
+                    /* ioException= */ null,
+                    /* cancelled= */ true));
+        return;
+      } else if (assetList == null || assetList.assets.isEmpty()) {
+        // Mark the ad as failed and schedule the next asset list for loading (if any).
+        handleAssetResolutionFailed(new IOException("empty asset list"), /* cancelled= */ false);
         return;
       }
-      AdPlaybackState.AdGroup adGroup = adPlaybackState.getAdGroup(assetListData.adGroupIndex);
+      AdPlaybackState.AdGroup adGroup =
+          checkNotNull(adPlaybackState).getAdGroup(assetListData.adGroupIndex);
       long oldAdDurationUs =
           adGroup.durationsUs[assetListData.adIndexInAdGroup] != C.TIME_UNSET
               ? adGroup.durationsUs[assetListData.adIndexInAdGroup]
@@ -1651,6 +1862,11 @@ public final class HlsInterstitialsAdsLoader implements AdsLoader {
         adPlaybackState =
             adPlaybackState.withAvailableAdMediaItem(
                 assetListData.adGroupIndex, adIndex, mediaItem);
+        if (assetList.skipInfo != null) {
+          adPlaybackState =
+              adPlaybackState.withAdSkipInfo(
+                  assetListData.adGroupIndex, adIndex, assetList.skipInfo);
+        }
       }
       adPlaybackState =
           adPlaybackState.withAdDurationsUs(assetListData.adGroupIndex, newDurationsUs);

@@ -15,10 +15,11 @@
  */
 package androidx.media3.session;
 
-import static androidx.media3.common.util.Assertions.checkArgument;
-import static androidx.media3.common.util.Assertions.checkNotNull;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.os.Looper;
 import android.view.Surface;
@@ -270,9 +271,10 @@ public class MockPlayer implements Player {
   private final ArraySet<Listener> listeners = new ArraySet<>();
   private final ImmutableMap<@Method Integer, ConditionVariable> conditionVariables =
       createMethodConditionVariables();
-
+  private final SurfaceCallback surfaceCallback;
   @Nullable PlaybackException playerError;
   public AudioAttributes audioAttributes;
+  public int audioSessionId;
   public long seekPositionMs;
   public int seekMediaItemIndex;
   public long currentPosition;
@@ -334,7 +336,7 @@ public class MockPlayer implements Player {
     playbackParameters = PlaybackParameters.DEFAULT;
 
     if (builder.itemCount > 0) {
-      mediaItems = MediaTestUtils.createMediaItems(builder.itemCount);
+      mediaItems = MediaTestUtils.createMediaItems(builder.itemCount, true);
       timeline = new PlaylistTimeline(mediaItems);
     } else {
       mediaItems = new ArrayList<>();
@@ -343,6 +345,7 @@ public class MockPlayer implements Player {
 
     // Sets default audio attributes to prevent setVolume() from being called with the play().
     audioAttributes = AudioAttributes.DEFAULT;
+    audioSessionId = C.AUDIO_SESSION_ID_UNSET;
 
     playlistMetadata = MediaMetadata.EMPTY;
     index = C.INDEX_UNSET;
@@ -378,6 +381,7 @@ public class MockPlayer implements Player {
 
     currentTracks = Tracks.EMPTY;
     trackSelectionParameters = TrackSelectionParameters.DEFAULT;
+    surfaceCallback = new SurfaceCallback();
   }
 
   @Override
@@ -690,6 +694,16 @@ public class MockPlayer implements Player {
     }
   }
 
+  public void notifyAudioSessionIdChanged(int audioSessionId) {
+    if (this.audioSessionId == audioSessionId) {
+      return;
+    }
+    this.audioSessionId = audioSessionId;
+    for (Listener listener : listeners) {
+      listener.onAudioSessionIdChanged(audioSessionId);
+    }
+  }
+
   @Override
   public AudioAttributes getAudioAttributes() {
     return audioAttributes;
@@ -882,6 +896,7 @@ public class MockPlayer implements Player {
   @Override
   public void setMediaItems(List<MediaItem> mediaItems) {
     this.mediaItems = new ArrayList<>(mediaItems);
+    adjustIndicesAfterMediaItemUpdate();
     checkNotNull(conditionVariables.get(METHOD_SET_MEDIA_ITEMS)).open();
   }
 
@@ -889,6 +904,7 @@ public class MockPlayer implements Player {
   public void setMediaItems(List<MediaItem> mediaItems, boolean resetPosition) {
     this.mediaItems = new ArrayList<>(mediaItems);
     this.resetPosition = resetPosition;
+    adjustIndicesAfterMediaItemUpdate();
     checkNotNull(conditionVariables.get(METHOD_SET_MEDIA_ITEMS_WITH_RESET_POSITION)).open();
   }
 
@@ -897,7 +913,15 @@ public class MockPlayer implements Player {
     this.mediaItems = new ArrayList<>(mediaItems);
     this.startMediaItemIndex = startIndex;
     this.startPositionMs = startPositionMs;
+    adjustIndicesAfterMediaItemUpdate();
     checkNotNull(conditionVariables.get(METHOD_SET_MEDIA_ITEMS_WITH_START_INDEX)).open();
+  }
+
+  private void adjustIndicesAfterMediaItemUpdate() {
+    if (mediaItems.isEmpty()) {
+      currentMediaItemIndex = 0;
+      currentPeriodIndex = 0;
+    }
   }
 
   @Override
@@ -1244,12 +1268,18 @@ public class MockPlayer implements Player {
 
   @Override
   public void setVideoSurfaceHolder(@Nullable SurfaceHolder surfaceHolder) {
+    if (this.surfaceHolder != null) {
+      this.surfaceHolder.removeCallback(surfaceCallback);
+    }
     this.surfaceHolder = surfaceHolder;
     if (surfaceHolder == null || surfaceHolder.getSurfaceFrame() == null) {
       maybeUpdateSurfaceSize(/* width= */ 0, /* height= */ 0);
     } else {
+      surfaceHolder.addCallback(surfaceCallback);
       Rect rect = surfaceHolder.getSurfaceFrame();
       maybeUpdateSurfaceSize(rect.width(), rect.height());
+      surfaceCallback.surfaceChanged(
+          surfaceHolder, PixelFormat.RGBA_8888, rect.width(), rect.height());
     }
   }
 
@@ -1315,7 +1345,7 @@ public class MockPlayer implements Player {
   }
 
   public boolean surfaceExists() {
-    return surface != null;
+    return surface != null || surfaceHolder != null;
   }
 
   public void notifyDeviceVolumeChanged() {
@@ -1494,6 +1524,32 @@ public class MockPlayer implements Player {
 
     public MockPlayer build() {
       return new MockPlayer(this);
+    }
+  }
+
+  private class SurfaceCallback implements SurfaceHolder.Callback {
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+      // Leave as no-op
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+      if (surfaceSize.getWidth() != width || surfaceSize.getHeight() != height) {
+        surfaceSize = new Size(width, height);
+        for (Listener listener : listeners) {
+          listener.onSurfaceSizeChanged(surfaceSize.getWidth(), surfaceSize.getHeight());
+        }
+      }
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+      surfaceSize = Size.UNKNOWN;
+      for (Listener listener : listeners) {
+        listener.onSurfaceSizeChanged(surfaceSize.getWidth(), surfaceSize.getHeight());
+      }
     }
   }
 }

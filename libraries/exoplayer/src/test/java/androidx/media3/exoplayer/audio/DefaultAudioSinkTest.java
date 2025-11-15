@@ -16,9 +16,10 @@
 package androidx.media3.exoplayer.audio;
 
 import static android.os.Build.VERSION.SDK_INT;
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.exoplayer.audio.AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY;
 import static androidx.media3.exoplayer.audio.AudioSink.SINK_FORMAT_SUPPORTED_WITH_TRANSCODING;
+import static androidx.media3.test.utils.robolectric.RobolectricUtil.runMainLooperUntil;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 import static org.robolectric.Shadows.shadowOf;
@@ -51,6 +52,7 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -61,7 +63,6 @@ import org.robolectric.shadows.AudioDeviceInfoBuilder;
 import org.robolectric.shadows.AudioProfileBuilder;
 import org.robolectric.shadows.ShadowAudioManager;
 import org.robolectric.shadows.ShadowAudioTrack;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowSystemClock;
 import org.robolectric.shadows.ShadowUIModeManager;
 
@@ -446,7 +447,7 @@ public final class DefaultAudioSinkTest {
   }
 
   @Test
-  @Config(minSdk = Config.OLDEST_SDK) // AudioManager.TYPE_BLUETOOTH_A2DP is supported from API 23.
+  @Config(minSdk = Config.OLDEST_SDK)
   public void bluetoothDeviceAddedAndRemoved_audioCapabilitiesUpdated() {
     // Set UI mode to TV.
     getShadowUiModeManager().setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
@@ -488,8 +489,7 @@ public final class DefaultAudioSinkTest {
   }
 
   @Test
-  @Config(
-      minSdk = Config.OLDEST_SDK) // AudioManager.ACTION_HDMI_AUDIO_PLUG is supported from API 21.
+  @Config(minSdk = Config.OLDEST_SDK)
   public void hdmiDeviceAddedAndRemoved_audioCapabilitiesUpdated() {
     // Set UI mode to TV.
     getShadowUiModeManager().setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
@@ -577,9 +577,7 @@ public final class DefaultAudioSinkTest {
   // Adding the permission to the test AndroidManifest.xml doesn't work to appease lint.
   @SuppressWarnings({"StickyBroadcast", "MissingPermission"})
   @Test
-  @Config(
-      minSdk = Config.OLDEST_SDK,
-      maxSdk = 32) // AudioManager.TYPE_BLUETOOTH_A2DP is supported from API 23.
+  @Config(minSdk = Config.OLDEST_SDK, maxSdk = 32)
   public void setPreferredDevice_audioCapabilitiesUpdated() {
     // Initially setup the audio sink with Bluetooth and HDMI device connected.
     AudioDeviceInfo hdmiDevice =
@@ -654,13 +652,12 @@ public final class DefaultAudioSinkTest {
 
     // Changed the routing to HDMI and assert that the surround sound is now supported.
     ShadowAudioTrack.setRoutedDevice(hdmiDevice);
-    ShadowLooper.idleMainLooper();
 
-    assertThat(audioSink.supportsFormat(surroundFormat)).isTrue();
+    runMainLooperUntil(() -> audioSink.supportsFormat(surroundFormat));
   }
 
   @Test
-  @Config(minSdk = Config.OLDEST_SDK) // AudioManager.TYPE_BLUETOOTH_A2DP is supported from API 23.
+  @Config(minSdk = Config.OLDEST_SDK)
   public void afterRelease_bluetoothDeviceAdded_audioCapabilitiesShouldNotBeUpdated() {
     // Set UI mode to TV.
     getShadowUiModeManager().setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
@@ -691,8 +688,7 @@ public final class DefaultAudioSinkTest {
   }
 
   @Test
-  @Config(
-      minSdk = Config.OLDEST_SDK) // AudioManager.ACTION_HDMI_AUDIO_PLUG is supported from API 21.
+  @Config(minSdk = Config.OLDEST_SDK)
   public void afterRelease_hdmiDeviceAdded_audioCapabilitiesShouldNotBeUpdated() {
     // Set UI mode to TV.
     getShadowUiModeManager().setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION);
@@ -756,6 +752,52 @@ public final class DefaultAudioSinkTest {
     defaultAudioSinkBuilder.build();
 
     assertThrows(IllegalStateException.class, defaultAudioSinkBuilder::build);
+  }
+
+  @Test
+  public void handleBuffer_recoverableWriteError_throwsWriteException() throws Exception {
+    Context context = ApplicationProvider.getApplicationContext();
+    AtomicBoolean writeShouldFail = new AtomicBoolean();
+    AudioOutputProvider audioOutputProvider =
+        new ForwardingAudioOutputProvider(
+            new AudioTrackAudioOutputProvider.Builder(context).build()) {
+          @Override
+          public AudioOutput getAudioOutput(OutputConfig config) throws InitializationException {
+            return new ForwardingAudioOutput(super.getAudioOutput(config)) {
+              @Override
+              public boolean write(
+                  ByteBuffer buffer, int encodedAccessUnitCount, long presentationTimeUs)
+                  throws WriteException {
+                if (writeShouldFail.get()) {
+                  throw new WriteException(/* errorCode= */ 1234, /* isRecoverable= */ true);
+                }
+                return super.write(buffer, encodedAccessUnitCount, presentationTimeUs);
+              }
+            };
+          }
+        };
+    defaultAudioSink =
+        new DefaultAudioSink.Builder(context).setAudioOutputProvider(audioOutputProvider).build();
+    configureDefaultAudioSink(CHANNEL_COUNT_STEREO);
+    // First write succeeds
+    assertThat(
+            defaultAudioSink.handleBuffer(
+                create1Sec44100HzSilenceBuffer(),
+                /* presentationTimeUs= */ 0,
+                /* encodedAccessUnitCount= */ 1))
+        .isTrue();
+
+    // Second write fails with recoverable error
+    writeShouldFail.set(true);
+    AudioSink.WriteException e =
+        assertThrows(
+            AudioSink.WriteException.class,
+            () ->
+                defaultAudioSink.handleBuffer(
+                    create1Sec44100HzSilenceBuffer(),
+                    /* presentationTimeUs= */ 1_000_000,
+                    /* encodedAccessUnitCount= */ 1));
+    assertThat(e.isRecoverable).isTrue();
   }
 
   private void configureDefaultAudioSink(int channelCount) throws AudioSink.ConfigurationException {

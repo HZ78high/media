@@ -15,12 +15,13 @@
  */
 package androidx.media3.exoplayer.audio;
 
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.DISCARD_REASON_DRM_SESSION_CHANGED;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.DISCARD_REASON_REUSE_NOT_IMPLEMENTED;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.REUSE_RESULT_NO;
 import static androidx.media3.exoplayer.source.SampleStream.FLAG_REQUIRE_FORMAT;
 import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.annotation.ElementType.TYPE_USE;
@@ -39,7 +40,6 @@ import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.audio.AudioProcessor;
-import androidx.media3.common.util.Assertions;
 import androidx.media3.common.util.Log;
 import androidx.media3.common.util.TraceUtil;
 import androidx.media3.common.util.UnstableApi;
@@ -84,6 +84,11 @@ import java.lang.annotation.RetentionPolicy;
  *   <li>Message with type {@link #MSG_SET_AUX_EFFECT_INFO} to set the auxiliary effect. The message
  *       payload should be an {@link AuxEffectInfo} instance that will configure the underlying
  *       audio track.
+ *   <li>Message with type {@link #MSG_SET_PREFERRED_AUDIO_DEVICE} to set the preferred audio output
+ *       device. The message payload should be an {@link AudioDeviceInfo} instance.
+ *   <li>Message with type {@link #MSG_SET_VIRTUAL_DEVICE_ID} to set the virtual device id. The
+ *       message payload should be an {@link Integer} for the virtual device id or {@link
+ *       C#INDEX_UNSET} if unspecified.
  *   <li>Message with type {@link #MSG_SET_SKIP_SILENCE_ENABLED} to enable or disable skipping
  *       silences. The message payload should be a {@link Boolean}.
  *   <li>Message with type {@link #MSG_SET_AUDIO_SESSION_ID} to set the audio session ID. The
@@ -243,7 +248,8 @@ public abstract class DecoderAudioRenderer<
 
   @Override
   public long getDurationToProgressUs(long positionUs, long elapsedRealtimeUs) {
-    boolean audioSinkBufferFull = nextBufferToWritePresentationTimeUs != C.TIME_UNSET;
+    boolean audioSinkBufferFull =
+        audioSink.hasPendingData() && nextBufferToWritePresentationTimeUs != C.TIME_UNSET;
     if (!isStarted) {
       // When not started we can only make further progress if the audio track buffer isn't filled
       // yet and there is more data to fill it.
@@ -333,7 +339,7 @@ public abstract class DecoderAudioRenderer<
         onInputFormatChanged(formatHolder);
       } else if (result == C.RESULT_BUFFER_READ) {
         // End of stream read having not read a format.
-        Assertions.checkState(flagsOnlyBuffer.isEndOfStream());
+        checkState(flagsOnlyBuffer.isEndOfStream());
         inputStreamEnded = true;
         try {
           processEndOfStream();
@@ -666,7 +672,9 @@ public abstract class DecoderAudioRenderer<
   }
 
   @Override
-  protected void onPositionReset(long positionUs, boolean joining) throws ExoPlaybackException {
+  protected void onPositionReset(
+      long positionUs, boolean joining, boolean sampleStreamIsResetToKeyFrame)
+      throws ExoPlaybackException {
     audioSink.flush();
 
     currentPositionUs = positionUs;
@@ -757,6 +765,9 @@ public abstract class DecoderAudioRenderer<
       case MSG_SET_PREFERRED_AUDIO_DEVICE:
         audioSink.setPreferredDevice((AudioDeviceInfo) message);
         break;
+      case MSG_SET_VIRTUAL_DEVICE_ID:
+        audioSink.setVirtualDeviceId((Integer) checkNotNull(message));
+        break;
       case MSG_SET_CAMERA_MOTION_LISTENER:
       case MSG_SET_CHANGE_FRAME_RATE_STRATEGY:
       case MSG_SET_SCALING_MODE:
@@ -846,7 +857,7 @@ public abstract class DecoderAudioRenderer<
   }
 
   private void onInputFormatChanged(FormatHolder formatHolder) throws ExoPlaybackException {
-    Format newFormat = Assertions.checkNotNull(formatHolder.format);
+    Format newFormat = checkNotNull(formatHolder.format);
     setSourceDrmSession(formatHolder.drmSession);
     Format oldFormat = inputFormat;
     inputFormat = newFormat;

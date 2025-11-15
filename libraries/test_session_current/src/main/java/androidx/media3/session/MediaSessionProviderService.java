@@ -16,7 +16,6 @@
 package androidx.media3.session;
 
 import static androidx.media3.common.Player.COMMAND_GET_TRACKS;
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.session.MediaConstants.CUSTOM_COMMAND_DOWNLOAD;
 import static androidx.media3.session.MediaSession.ConnectionResult.accept;
 import static androidx.media3.test.session.common.CommonConstants.ACTION_MEDIA3_SESSION;
@@ -78,6 +77,7 @@ import static androidx.media3.test.session.common.MediaSessionConstants.TEST_ON_
 import static androidx.media3.test.session.common.MediaSessionConstants.TEST_ON_VIDEO_SIZE_CHANGED;
 import static androidx.media3.test.session.common.MediaSessionConstants.TEST_SET_SHOW_PLAY_BUTTON_IF_SUPPRESSED_TO_FALSE;
 import static androidx.media3.test.session.common.MediaSessionConstants.TEST_WITH_CUSTOM_COMMANDS;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
@@ -434,7 +434,7 @@ public class MediaSessionProviderService extends Service {
                       @Nullable ProgressReporter progressReporter) {
                     if (!customCommand.customAction.equals(CUSTOM_COMMAND_DOWNLOAD)) {
                       return Futures.immediateFuture(
-                          new SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED));
+                          new SessionResult(SessionError.ERROR_NOT_SUPPORTED));
                     }
                     SettableFuture<SessionResult> settable = SettableFuture.create();
                     if (progressReporter != null) {
@@ -505,6 +505,15 @@ public class MediaSessionProviderService extends Service {
                         },
                         directExecutor());
                     return immediateFuture(new SessionResult(SessionResult.RESULT_SUCCESS));
+                  }
+
+                  @Override
+                  public ListenableFuture<List<MediaItem>> onAddMediaItems(
+                      MediaSession mediaSession,
+                      ControllerInfo controller,
+                      List<MediaItem> mediaItems) {
+                    // Implement this to avoid confusing stack traces in the logs of unit tests.
+                    return Futures.immediateFuture(mediaItems);
                   }
                 });
             break;
@@ -1181,6 +1190,17 @@ public class MediaSessionProviderService extends Service {
     }
 
     @Override
+    public void notifyAudioSessionIdChanged(String sessionId, int audioSessionId)
+        throws RemoteException {
+      runOnHandler(
+          () -> {
+            MediaSession session = sessionMap.get(sessionId);
+            MockPlayer player = (MockPlayer) session.getPlayer();
+            player.notifyAudioSessionIdChanged(audioSessionId);
+          });
+    }
+
+    @Override
     public void notifyAudioAttributesChanged(String sessionId, Bundle audioAttributesBundle)
         throws RemoteException {
       AudioAttributes audioAttributes = AudioAttributes.fromBundle(audioAttributesBundle);
@@ -1224,7 +1244,8 @@ public class MediaSessionProviderService extends Service {
             List<MediaItem> mediaItems = new ArrayList<>();
             for (int windowIndex = 0; windowIndex < windowCount; windowIndex++) {
               mediaItems.add(
-                  MediaTestUtils.createMediaItem(TestUtils.getMediaIdInFakeTimeline(windowIndex)));
+                  MediaTestUtils.createMediaItem(
+                      TestUtils.getMediaIdInFakeTimeline(windowIndex), /* buildWithUri= */ true));
             }
             player.mediaItems.clear();
             player.mediaItems.addAll(mediaItems);
@@ -1282,6 +1303,28 @@ public class MediaSessionProviderService extends Service {
             MediaSession session = sessionMap.get(sessionId);
             MockPlayer player = (MockPlayer) session.getPlayer();
             player.currentMediaItemIndex = index;
+          });
+    }
+
+    @Override
+    public void setCurrentMediaItemIndexAndPeriodIndex(
+        String sessionId, int mediaItemIndex, int periodIndex) throws RemoteException {
+      runOnHandler(
+          () -> {
+            MediaSession session = sessionMap.get(sessionId);
+            MockPlayer player = (MockPlayer) session.getPlayer();
+            player.currentMediaItemIndex = mediaItemIndex;
+            player.currentPeriodIndex = periodIndex;
+          });
+    }
+
+    @Override
+    public void setCurrentPeriodIndex(String sessionId, int index) throws RemoteException {
+      runOnHandler(
+          () -> {
+            MediaSession session = sessionMap.get(sessionId);
+            MockPlayer player = (MockPlayer) session.getPlayer();
+            player.currentPeriodIndex = index;
           });
     }
 
@@ -1403,6 +1446,16 @@ public class MediaSessionProviderService extends Service {
             MediaSession session = sessionMap.get(sessionId);
             MockPlayer player = (MockPlayer) session.getPlayer();
             return player.surfaceExists();
+          });
+    }
+
+    @Override
+    public Bundle getSurfaceSize(String sessionId) throws RemoteException {
+      return runOnHandler(
+          () -> {
+            MediaSession session = sessionMap.get(sessionId);
+            MockPlayer player = (MockPlayer) session.getPlayer();
+            return player.getSurfaceSize().toBundle();
           });
     }
 

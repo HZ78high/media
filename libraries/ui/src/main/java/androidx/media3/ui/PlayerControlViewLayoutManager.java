@@ -51,6 +51,7 @@ import java.util.List;
   private final PlayerControlView playerControlView;
 
   @Nullable private final View controlsBackground;
+  @Nullable private final ViewGroup topControls;
   @Nullable private final ViewGroup centerControls;
   @Nullable private final ViewGroup bottomBar;
   @Nullable private final ViewGroup topControllers;
@@ -98,6 +99,9 @@ import java.util.List;
     uxState = UX_STATE_ALL_VISIBLE;
     shownButtons = new ArrayList<>();
 
+    // Relating to Top Bar View
+    topControls = playerControlView.findViewById(R.id.exo_top_controls);
+
     // Relating to Center View
     controlsBackground = playerControlView.findViewById(R.id.exo_controls_background);
     centerControls = playerControlView.findViewById(R.id.exo_center_controls);
@@ -133,6 +137,9 @@ import java.util.List;
           if (controlsBackground != null) {
             controlsBackground.setAlpha(animatedValue);
           }
+          if (topControls != null) {
+            topControls.setAlpha(animatedValue);
+          }
           if (centerControls != null) {
             centerControls.setAlpha(animatedValue);
           }
@@ -159,6 +166,9 @@ import java.util.List;
           public void onAnimationEnd(Animator animation) {
             if (controlsBackground != null) {
               controlsBackground.setVisibility(View.INVISIBLE);
+            }
+            if (topControls != null) {
+              topControls.setVisibility(View.INVISIBLE);
             }
             if (centerControls != null) {
               centerControls.setVisibility(View.INVISIBLE);
@@ -221,6 +231,9 @@ import java.util.List;
           if (controlsBackground != null) {
             controlsBackground.setAlpha(animatedValue);
           }
+          if (topControls != null) {
+            topControls.setAlpha(animatedValue);
+          }
           if (centerControls != null) {
             centerControls.setAlpha(animatedValue);
           }
@@ -240,6 +253,9 @@ import java.util.List;
           public void onAnimationStart(Animator animation) {
             if (controlsBackground != null) {
               controlsBackground.setVisibility(View.VISIBLE);
+            }
+            if (topControls != null) {
+              topControls.setVisibility(View.VISIBLE);
             }
             if (centerControls != null) {
               centerControls.setVisibility(View.VISIBLE);
@@ -860,6 +876,7 @@ import java.util.List;
     return (id == R.id.exo_bottom_bar
         || id == R.id.exo_top_controls
         || id == R.id.exo_bottom_controls
+        || id == R.id.exo_media_route_button_placeholder
         || id == R.id.exo_prev
         || id == R.id.exo_next
         || id == R.id.exo_rew

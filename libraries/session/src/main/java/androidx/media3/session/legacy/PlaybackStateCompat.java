@@ -16,7 +16,7 @@
 package androidx.media3.session.legacy;
 
 import static androidx.annotation.RestrictTo.Scope.LIBRARY;
-import static androidx.media3.common.util.Assertions.checkNotNull;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 import android.annotation.SuppressLint;
 import android.media.session.PlaybackState;
@@ -29,7 +29,6 @@ import androidx.annotation.IntDef;
 import androidx.annotation.LongDef;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
-import androidx.media3.common.util.UnstableApi;
 import com.google.common.collect.ImmutableList;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -41,7 +40,6 @@ import java.util.List;
  * PlaybackStateCompat#STATE_PLAYING}, the current playback position, and the current control
  * capabilities.
  */
-@UnstableApi
 @RestrictTo(LIBRARY)
 @SuppressLint("BanParcelableUsage")
 public final class PlaybackStateCompat implements Parcelable {

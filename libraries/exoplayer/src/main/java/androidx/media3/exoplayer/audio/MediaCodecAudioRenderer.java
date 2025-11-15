@@ -16,10 +16,10 @@
 package androidx.media3.exoplayer.audio;
 
 import static android.os.Build.VERSION.SDK_INT;
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.DISCARD_REASON_MAX_INPUT_SIZE_EXCEEDED;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.REUSE_RESULT_NO;
 import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
@@ -90,11 +90,18 @@ import java.util.Objects;
  *   <li>Message with type {@link #MSG_SET_AUX_EFFECT_INFO} to set the auxiliary effect. The message
  *       payload should be an {@link AuxEffectInfo} instance that will configure the underlying
  *       audio track.
+ *   <li>Message with type {@link #MSG_SET_PREFERRED_AUDIO_DEVICE} to set the preferred audio output
+ *       device. The message payload should be an {@link AudioDeviceInfo} instance.
+ *   <li>Message with type {@link #MSG_SET_VIRTUAL_DEVICE_ID} to set the virtual device id. The
+ *       message payload should be an {@link Integer} for the virtual device id or {@link
+ *       C#INDEX_UNSET} if unspecified.
  *   <li>Message with type {@link #MSG_SET_SKIP_SILENCE_ENABLED} to enable or disable skipping
  *       silences. The message payload should be a {@link Boolean}.
  *   <li>Message with type {@link #MSG_SET_AUDIO_SESSION_ID} to set the audio session ID. The
  *       message payload should be a session ID {@link Integer} that will be attached to the
  *       underlying audio track.
+ *   <li>Message with type {@link #MSG_SET_PRIORITY} to set the priority of the renderer. The
+ *       message payload should be an {@link Integer}.
  * </ul>
  */
 @UnstableApi
@@ -521,7 +528,8 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   @Override
   protected long getDurationToProgressUs(
       long positionUs, long elapsedRealtimeUs, boolean isOnBufferAvailableListenerRegistered) {
-    boolean audioSinkBufferFull = nextBufferToWritePresentationTimeUs != C.TIME_UNSET;
+    boolean audioSinkBufferFull =
+        audioSink.hasPendingData() && nextBufferToWritePresentationTimeUs != C.TIME_UNSET;
     if (!isStarted) {
       // When not started we can only make further progress if the audio track buffer isn't filled
       // yet and there is more data to fill it.
@@ -687,8 +695,10 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   }
 
   @Override
-  protected void onPositionReset(long positionUs, boolean joining) throws ExoPlaybackException {
-    super.onPositionReset(positionUs, joining);
+  protected void onPositionReset(
+      long positionUs, boolean joining, boolean sampleStreamIsResetToKeyFrame)
+      throws ExoPlaybackException {
+    super.onPositionReset(positionUs, joining, sampleStreamIsResetToKeyFrame);
     audioSink.flush();
 
     currentPositionUs = positionUs;
@@ -819,6 +829,15 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
 
     if (isDecodeOnlyBuffer) {
       if (codec != null) {
+        if (DEBUG_LOG_ENABLED) {
+          Log.d(
+              DEBUG_LOG_TAG,
+              "audio, release output, pts="
+                  + bufferPresentationTimeUs
+                  + ", pos="
+                  + positionUs
+                  + ", decode-only");
+        }
         codec.releaseOutputBuffer(bufferIndex, false);
       }
       decoderCounters.skippedOutputBufferCount += sampleCount;
@@ -851,6 +870,15 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
 
     if (fullyConsumed) {
       if (codec != null) {
+        if (DEBUG_LOG_ENABLED) {
+          Log.d(
+              DEBUG_LOG_TAG,
+              "audio, release output, pts="
+                  + bufferPresentationTimeUs
+                  + ", pos="
+                  + positionUs
+                  + (isLastBuffer ? ", last-buffer" : ""));
+        }
         codec.releaseOutputBuffer(bufferIndex, false);
       }
       decoderCounters.renderedOutputBufferCount += sampleCount;
@@ -904,6 +932,9 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
         break;
       case MSG_SET_PREFERRED_AUDIO_DEVICE:
         audioSink.setPreferredDevice((AudioDeviceInfo) message);
+        break;
+      case MSG_SET_VIRTUAL_DEVICE_ID:
+        audioSink.setVirtualDeviceId((Integer) checkNotNull(message));
         break;
       case MSG_SET_SKIP_SILENCE_ENABLED:
         audioSink.setSkipSilenceEnabled((Boolean) checkNotNull(message));

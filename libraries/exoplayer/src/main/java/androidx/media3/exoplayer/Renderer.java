@@ -373,6 +373,13 @@ public interface Renderer extends PlayerMessage.Target {
   int MSG_SET_SCRUBBING_MODE = 18;
 
   /**
+   * The type of a message that can be passed to audio renderers via {@link
+   * ExoPlayer#createMessage(PlayerMessage.Target)}. The message payload should be an {@link
+   * Integer} instance representing the virtual device id, or {@link C#INDEX_UNSET} if unspecified.
+   */
+  int MSG_SET_VIRTUAL_DEVICE_ID = 19;
+
+  /**
    * Applications or extensions may define custom {@code MSG_*} constants that can be passed to
    * renderers. These custom constants must be greater than or equal to this value.
    */
@@ -603,16 +610,36 @@ public interface Renderer extends PlayerMessage.Target {
   /**
    * Signals to the renderer that a position discontinuity has occurred.
    *
-   * <p>After a position discontinuity, the renderer's {@link SampleStream} is guaranteed to provide
-   * samples starting from a key frame.
+   * <p>If {@code sampleStreamIsResetToKeyFrame} is {@code true} then after the position
+   * discontinuity, the renderer's {@link SampleStream} is guaranteed to provide samples starting
+   * from a key frame.
+   *
+   * <p>{@code sampleStreamIsResetToKeyFrame} is guaranteed to be {@code true} unless the
+   * implementation overrides {@link #supportsResetPositionWithoutKeyFrameReset(long positionUs)} to
+   * return {@code true}.
    *
    * <p>This method may be called when the renderer is in the following states: {@link
    * #STATE_ENABLED}, {@link #STATE_STARTED}.
    *
    * @param positionUs The new playback position in microseconds.
+   * @param sampleStreamIsResetToKeyFrame Whether the renderer's {@link SampleStream} is guaranteed
+   *     to provide samples starting from a key frame.
    * @throws ExoPlaybackException If an error occurs handling the reset.
    */
-  void resetPosition(long positionUs) throws ExoPlaybackException;
+  void resetPosition(long positionUs, boolean sampleStreamIsResetToKeyFrame)
+      throws ExoPlaybackException;
+
+  /**
+   * Returns whether the renderer can support processing a position discontinuity without a key
+   * frame reset.
+   *
+   * @param positionUs The new playback position in microseconds.
+   * @return Whether the renderer can support processing a position discontinuity without a key
+   *     frame reset.
+   */
+  default boolean supportsResetPositionWithoutKeyFrameReset(long positionUs) {
+    return false;
+  }
 
   /**
    * Indicates the playback speed to this renderer.

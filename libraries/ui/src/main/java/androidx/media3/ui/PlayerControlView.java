@@ -41,10 +41,12 @@ import static androidx.media3.common.Player.EVENT_SEEK_FORWARD_INCREMENT_CHANGED
 import static androidx.media3.common.Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED;
 import static androidx.media3.common.Player.EVENT_TIMELINE_CHANGED;
 import static androidx.media3.common.Player.EVENT_TRACKS_CHANGED;
-import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.common.util.Util.castNonNull;
 import static androidx.media3.common.util.Util.getDrawable;
 import static androidx.media3.common.util.Util.msToUs;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -52,6 +54,7 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
@@ -76,7 +79,7 @@ import androidx.media3.common.TrackGroup;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.Tracks;
-import androidx.media3.common.util.Assertions;
+import androidx.media3.common.ViewProvider;
 import androidx.media3.common.util.Log;
 import androidx.media3.common.util.RepeatModeUtil;
 import androidx.media3.common.util.UnstableApi;
@@ -84,6 +87,8 @@ import androidx.media3.common.util.Util;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -380,6 +385,7 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
 
   private final PlayerControlViewLayoutManager controlViewLayoutManager;
   private final Resources resources;
+  private final Handler handler;
   private final ComponentListener componentListener;
   @Nullable private final Class<?> exoplayerClazz;
   @Nullable private final Method setScrubbingModeEnabledMethod;
@@ -709,6 +715,7 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
       timeBar.addListener(componentListener);
     }
 
+    handler = Util.createHandlerForCurrentLooper();
     resources = context.getResources();
     playPauseButton = findViewById(R.id.exo_play_pause);
     if (playPauseButton != null) {
@@ -881,9 +888,8 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
    *     player.getApplicationLooper() == Looper.getMainLooper()}).
    */
   public void setPlayer(@Nullable Player player) {
-    Assertions.checkState(Looper.myLooper() == Looper.getMainLooper());
-    Assertions.checkArgument(
-        player == null || player.getApplicationLooper() == Looper.getMainLooper());
+    checkState(Looper.myLooper() == Looper.getMainLooper());
+    checkArgument(player == null || player.getApplicationLooper() == Looper.getMainLooper());
     if (this.player == player) {
       return;
     }
@@ -937,8 +943,8 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
       this.extraAdGroupTimesMs = new long[0];
       this.extraPlayedAdGroups = new boolean[0];
     } else {
-      extraPlayedAdGroups = checkNotNull(extraPlayedAdGroups);
-      Assertions.checkArgument(extraAdGroupTimesMs.length == extraPlayedAdGroups.length);
+      checkNotNull(extraPlayedAdGroups);
+      checkArgument(extraAdGroupTimesMs.length == extraPlayedAdGroups.length);
       this.extraAdGroupTimesMs = extraAdGroupTimesMs;
       this.extraPlayedAdGroups = extraPlayedAdGroups;
     }
@@ -1116,6 +1122,61 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
    */
   public void setShowSubtitleButton(boolean showSubtitleButton) {
     controlViewLayoutManager.setShowButton(subtitleButton, showSubtitleButton);
+  }
+
+  /**
+   * Sets a {@link ViewProvider} to be used for creating the media route button view.
+   *
+   * <p>If a provider is set, this {@link PlayerControlView} will obtain the media route button view
+   * from the provider and display it.
+   *
+   * <p>If {@code ViewProvider} is {@code null}, any previously set media route button will be
+   * removed.
+   *
+   * @param mediaRouteButtonViewProvider The {@link ViewProvider} to be used for providing the media
+   *     route button view, or {@code null} to remove the media route button.
+   * @throws IllegalStateException if the media route button fails to display due to an unexpected
+   *     error.
+   */
+  public void setMediaRouteButtonViewProvider(@Nullable ViewProvider mediaRouteButtonViewProvider) {
+    View mediaRouteButtonPlaceholder = findViewById(R.id.exo_media_route_button_placeholder);
+    if (mediaRouteButtonPlaceholder == null) {
+      throw new IllegalStateException("The media route button placeholder is missing.");
+    }
+    if (mediaRouteButtonViewProvider == null) {
+      mediaRouteButtonPlaceholder.setVisibility(GONE);
+      return;
+    }
+
+    ViewGroup parent = (ViewGroup) mediaRouteButtonPlaceholder.getParent();
+    if (parent == null) {
+      throw new IllegalStateException("The media route button placeholder has no parent view.");
+    }
+    Futures.addCallback(
+        mediaRouteButtonViewProvider.getView(parent),
+        new FutureCallback<View>() {
+          @Override
+          public void onSuccess(View mediaRouteButtonView) {
+            ViewGroup.LayoutParams layoutParams = mediaRouteButtonPlaceholder.getLayoutParams();
+            if (layoutParams == null) {
+              throw new IllegalStateException(
+                  "The media route button placeholder missing layout params.");
+            }
+            mediaRouteButtonView.setId(R.id.exo_media_route_button_placeholder);
+            mediaRouteButtonView.setLayoutParams(layoutParams);
+            int mediaRouteButtonIndex = parent.indexOfChild(mediaRouteButtonPlaceholder);
+            parent.removeView(mediaRouteButtonPlaceholder);
+            parent.addView(mediaRouteButtonView, mediaRouteButtonIndex);
+            mediaRouteButtonView.setVisibility(VISIBLE);
+            controlViewLayoutManager.setShowButton(mediaRouteButtonView, true);
+          }
+
+          @Override
+          public void onFailure(Throwable e) {
+            mediaRouteButtonPlaceholder.setVisibility(GONE);
+          }
+        },
+        handler::post);
   }
 
   /** Returns whether the VR button is shown. */
@@ -1479,7 +1540,7 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
         }
         timeline.getWindow(i, window);
         if (window.durationUs == C.TIME_UNSET) {
-          Assertions.checkState(!multiWindowTimeBar);
+          checkState(!multiWindowTimeBar);
           break;
         }
         for (int j = window.firstPeriodIndex; j <= window.lastPeriodIndex; j++) {
@@ -1998,6 +2059,9 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
                   + " instance, so ignoring (because we can't enable scrubbing mode). player.class="
                   + checkNotNull(player).getClass());
         }
+      }
+      if (isScrubbingModeEnabled(player)) {
+        seekToTimeBarPosition(player, position);
       }
     }
 
