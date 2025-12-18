@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -31,8 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
-import androidx.media3.demo.compose.indicator.HorizontalLinearProgressIndicator
-import androidx.media3.demo.compose.indicator.TextProgressIndicator
 import androidx.media3.ui.compose.material3.buttons.MuteButton
 import androidx.media3.ui.compose.material3.buttons.NextButton
 import androidx.media3.ui.compose.material3.buttons.PlayPauseButton
@@ -41,6 +40,8 @@ import androidx.media3.ui.compose.material3.buttons.RepeatButton
 import androidx.media3.ui.compose.material3.buttons.SeekBackButton
 import androidx.media3.ui.compose.material3.buttons.SeekForwardButton
 import androidx.media3.ui.compose.material3.buttons.ShuffleButton
+import androidx.media3.ui.compose.material3.indicator.PositionAndDurationText
+import androidx.media3.ui.compose.material3.indicator.ProgressSlider
 
 @Composable
 private fun RowControls(
@@ -91,13 +92,14 @@ internal fun BoxScope.Controls(player: Player) {
   )
   // Button panel controls
   Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
-    HorizontalLinearProgressIndicator(player, Modifier.fillMaxWidth())
+    ProgressSlider(player, Modifier.fillMaxWidth())
     Row(
-      modifier = Modifier.fillMaxWidth().background(Color.Gray.copy(alpha = 0.4f)),
-      horizontalArrangement = Arrangement.Center,
+      modifier =
+        Modifier.fillMaxWidth().background(Color.Gray.copy(alpha = 0.4f)).padding(start = 15.dp),
+      horizontalArrangement = Arrangement.Start,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      TextProgressIndicator(player, Modifier.align(Alignment.CenterVertically))
+      PositionAndDurationText(player)
       Spacer(Modifier.weight(1f))
       PlaybackSpeedPopUpButton(player)
       ShuffleButton(player)

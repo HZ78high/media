@@ -102,6 +102,7 @@ import androidx.media3.common.audio.AudioManagerCompat;
 import androidx.media3.common.audio.AudioProcessor;
 import com.google.common.base.Ascii;
 import com.google.common.base.Preconditions;
+import com.google.common.io.BaseEncoding;
 import com.google.common.io.ByteStreams;
 import com.google.common.math.DoubleMath;
 import com.google.common.math.LongMath;
@@ -192,9 +193,9 @@ public final class Util {
   private static final String TAG = "Util";
   private static final Pattern XS_DATE_TIME_PATTERN =
       Pattern.compile(
-          "(\\d\\d\\d\\d)\\-(\\d\\d)\\-(\\d\\d)[Tt]"
+          "(\\d\\d\\d\\d)\\-(\\d\\d)\\-(\\d\\d)[Tt ]"
               + "(\\d\\d):(\\d\\d):(\\d\\d)([\\.,](\\d+))?"
-              + "([Zz]|((\\+|\\-)(\\d?\\d):?(\\d\\d)))?");
+              + "([Zz]|((\\+|\\-)(\\d?\\d):?(\\d\\d)?))?");
   private static final Pattern XS_DURATION_PATTERN =
       Pattern.compile(
           "^(-)?P(([0-9]*)Y)?(([0-9]*)M)?(([0-9]*)D)?"
@@ -1059,6 +1060,29 @@ public final class Util {
   }
 
   /**
+   * Loads a file from a raw resource.
+   *
+   * <p>This should only be used for known-small files.
+   *
+   * <p>The file is assumed to be encoded in UTF-8.
+   *
+   * @param context The {@link Context}.
+   * @param resId The resource ID of the file to load.
+   * @return The content of the file to load.
+   * @throws IOException If the file couldn't be read.
+   */
+  @UnstableApi
+  public static String loadRawResource(Context context, int resId) throws IOException {
+    @Nullable InputStream inputStream = null;
+    try {
+      inputStream = context.getResources().openRawResource(resId);
+      return Util.fromUtf8Bytes(ByteStreams.toByteArray(inputStream));
+    } finally {
+      Util.closeQuietly(inputStream);
+    }
+  }
+
+  /**
    * Returns a new {@link String} constructed by decoding UTF-8 encoded bytes.
    *
    * @param bytes The UTF-8 encoded bytes to decode.
@@ -1713,6 +1737,10 @@ public final class Util {
    * Parses an xs:dateTime attribute value, returning the parsed timestamp in milliseconds since the
    * epoch.
    *
+   * <p>The parsing implemented here is deliberately more tolerant than the <a
+   * href="https://www.w3.org/TR/xmlschema-2/#dateTime">XML spec</a> allows, as this method is also
+   * used to parse ISO 8601 and RFC 3339 date-time strings.
+   *
    * @param value The attribute value to decode.
    * @return The parsed timestamp in milliseconds since the epoch.
    * @throws ParserException if an error occurs parsing the dateTime attribute value.
@@ -1735,8 +1763,11 @@ public final class Util {
     } else if (matcher.group(9).equalsIgnoreCase("Z")) {
       timezoneShift = 0;
     } else {
-      timezoneShift =
-          ((Integer.parseInt(matcher.group(12)) * 60 + Integer.parseInt(matcher.group(13))));
+      timezoneShift = Integer.parseInt(matcher.group(12)) * 60;
+      String timezoneOffsetMinutes = matcher.group(13);
+      if (timezoneOffsetMinutes != null) {
+        timezoneShift += Integer.parseInt(timezoneOffsetMinutes);
+      }
       if ("-".equals(matcher.group(11))) {
         timezoneShift *= -1;
       }
@@ -2079,15 +2110,7 @@ public final class Util {
    */
   @UnstableApi
   public static byte[] getBytesFromHexString(String hexString) {
-    byte[] data = new byte[hexString.length() / 2];
-    for (int i = 0; i < data.length; i++) {
-      int stringOffset = i * 2;
-      data[i] =
-          (byte)
-              ((Character.digit(hexString.charAt(stringOffset), 16) << 4)
-                  + Character.digit(hexString.charAt(stringOffset + 1), 16));
-    }
-    return data;
+    return BaseEncoding.base16().ignoreCase().decode(hexString);
   }
 
   /**
@@ -2098,13 +2121,7 @@ public final class Util {
    */
   @UnstableApi
   public static String toHexString(byte[] bytes) {
-    StringBuilder result = new StringBuilder(bytes.length * 2);
-    for (int i = 0; i < bytes.length; i++) {
-      result
-          .append(Character.forDigit((bytes[i] >> 4) & 0xF, 16))
-          .append(Character.forDigit(bytes[i] & 0xF, 16));
-    }
-    return result.toString();
+    return BaseEncoding.base16().lowerCase().encode(bytes);
   }
 
   @UnstableApi
@@ -3720,7 +3737,7 @@ public final class Util {
       case C.FORMAT_UNSUPPORTED_DRM:
         return "NO_UNSUPPORTED_DRM";
       case C.FORMAT_UNSUPPORTED_SUBTYPE:
-        return "NO_UNSUPPORTED_TYPE";
+        return "NO_UNSUPPORTED_SUBTYPE";
       case C.FORMAT_UNSUPPORTED_TYPE:
         return "NO";
       default:

@@ -54,6 +54,7 @@ import androidx.media3.common.AdPlaybackState;
 import androidx.media3.common.AdViewProvider;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaLibraryInfo;
 import androidx.media3.common.Metadata;
 import androidx.media3.common.Player;
 import androidx.media3.common.Timeline;
@@ -408,7 +409,8 @@ public final class ImaServerSideAdInsertionMediaSource extends CompositeMediaSou
         Bundle bundle = new Bundle();
         Bundle adPlaybackStatesBundle = new Bundle();
         for (Map.Entry<String, AdPlaybackState> entry : adPlaybackStates.entrySet()) {
-          adPlaybackStatesBundle.putBundle(entry.getKey(), entry.getValue().toBundle());
+          adPlaybackStatesBundle.putBundle(
+              entry.getKey(), entry.getValue().toBundle(MediaLibraryInfo.INTERFACE_VERSION));
         }
         bundle.putBundle(FIELD_AD_PLAYBACK_STATES, adPlaybackStatesBundle);
         return bundle;
@@ -422,7 +424,9 @@ public final class ImaServerSideAdInsertionMediaSource extends CompositeMediaSou
         Bundle adPlaybackStateBundle = checkNotNull(bundle.getBundle(FIELD_AD_PLAYBACK_STATES));
         for (String key : adPlaybackStateBundle.keySet()) {
           AdPlaybackState adPlaybackState =
-              AdPlaybackState.fromBundle(checkNotNull(adPlaybackStateBundle.getBundle(key)));
+              AdPlaybackState.fromBundle(
+                  checkNotNull(adPlaybackStateBundle.getBundle(key)),
+                  MediaLibraryInfo.INTERFACE_VERSION);
           adPlaybackStateMap.put(
               key, AdPlaybackState.fromAdPlaybackState(/* adsId= */ key, adPlaybackState));
         }
@@ -868,30 +872,19 @@ public final class ImaServerSideAdInsertionMediaSource extends CompositeMediaSou
 
   // Static methods.
 
-  @SuppressWarnings("deprecation") // b/192231683 prevents using non-deprecated method
   private static AdPlaybackState setVodAdGroupPlaceholders(
       List<CuePoint> cuePoints, AdPlaybackState adPlaybackState) {
-    // TODO(b/192231683) Use getEndTimeMs()/getStartTimeMs() after jar target was removed
     for (int i = 0; i < cuePoints.size(); i++) {
       CuePoint cuePoint = cuePoints.get(i);
-      long fromPositionUs = msToUs(secToMsRounded(cuePoint.getStartTime()));
+      long fromPositionUs = msToUs(cuePoint.getStartTimeMs());
       adPlaybackState =
           addAdGroupToAdPlaybackState(
               adPlaybackState,
               /* fromPositionUs= */ fromPositionUs,
               /* contentResumeOffsetUs= */ 0,
-              /* adDurationsUs...= */ getAdDuration(
-                  /* startTimeSeconds= */ cuePoint.getStartTime(),
-                  /* endTimeSeconds= */ cuePoint.getEndTime()));
+              /* adDurationsUs...= */ msToUs(cuePoint.getEndTimeMs() - cuePoint.getStartTimeMs()));
     }
     return adPlaybackState;
-  }
-
-  private static long getAdDuration(double startTimeSeconds, double endTimeSeconds) {
-    // startTimeSeconds and endTimeSeconds that are coming from the SDK, only have a precision of
-    // milliseconds so everything that is below a millisecond can be safely considered as coming
-    // from rounding issues.
-    return msToUs(secToMsRounded(endTimeSeconds - startTimeSeconds));
   }
 
   private static AdPlaybackState setVodAdInPlaceholder(Ad ad, AdPlaybackState adPlaybackState) {

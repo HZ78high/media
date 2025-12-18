@@ -77,15 +77,31 @@ class SeekForwardButtonStateTest {
   }
 
   @Test
-  fun onClick_stateBecomesDisabledAfterFirstClick_throwsException() {
+  fun onClick_stateBecomesDisabled_throwsException() {
     val player = createReadyPlayerWithTwoItems()
-    val state = SeekForwardButtonState(player)
+    lateinit var state: SeekForwardButtonState
+    composeTestRule.setContent { state = rememberSeekForwardButtonState(player) }
 
-    state.onClick()
-    // simulate state becoming disabled atomically, i.e. without yet receiving the relevant event
     player.removeCommands(Player.COMMAND_SEEK_FORWARD)
+    composeTestRule.waitForIdle()
 
     assertThrows(IllegalStateException::class.java) { state.onClick() }
+  }
+
+  @Test
+  fun onClick_justAfterCommandRemovedWhileStillEnabled_isNoOp() {
+    val player = createReadyPlayerWithTwoItems()
+    player.playWhenReady = false
+    player.setPosition(1000)
+    lateinit var state: SeekForwardButtonState
+    composeTestRule.setContent { state = rememberSeekForwardButtonState(player) }
+
+    // Simulate command becoming disabled without yet receiving the event callback
+    player.removeCommands(Player.COMMAND_SEEK_FORWARD)
+    check(state.isEnabled)
+    state.onClick()
+
+    assertThat(player.currentPosition).isEqualTo(1000)
   }
 
   @Test
@@ -106,6 +122,7 @@ class SeekForwardButtonStateTest {
   @Test
   fun positionNonZero_buttonClicked_positionJumpsForwardBySpecifiedAmount() {
     val player = createReadyPlayerWithTwoItems()
+    player.playWhenReady = false
     player.setPosition(500)
     player.setSeekForwardIncrementMs(300)
     val state = SeekForwardButtonState(player)
@@ -133,6 +150,7 @@ class SeekForwardButtonStateTest {
   @Test
   fun positionAtTheEnd_buttonClicked_positionDoesNotMove() {
     val player = createReadyPlayerWithTwoItems()
+    player.playWhenReady = false
     player.setPosition(player.duration)
     val state = SeekForwardButtonState(player)
 

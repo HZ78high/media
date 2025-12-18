@@ -15,7 +15,6 @@
  */
 package androidx.media3.transformer;
 
-import static androidx.media3.common.util.GlUtil.destroyEglContext;
 import static androidx.media3.common.util.Util.constrainValue;
 import static androidx.media3.common.util.Util.usToMs;
 import static androidx.media3.effect.DebugTraceUtil.COMPONENT_COMPOSITION_PLAYER;
@@ -29,16 +28,13 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
-import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.opengl.EGLContext;
-import android.opengl.EGLDisplay;
-import android.opengl.EGLSurface;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Process;
@@ -48,15 +44,12 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import androidx.annotation.IntRange;
 import androidx.annotation.Nullable;
-import androidx.annotation.RestrictTo;
-import androidx.annotation.RestrictTo.Scope;
 import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.Effect;
 import androidx.media3.common.Format;
 import androidx.media3.common.GlObjectsProvider;
-import androidx.media3.common.GlTextureInfo;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaItem.ClippingConfiguration;
 import androidx.media3.common.PlaybackException;
@@ -73,10 +66,8 @@ import androidx.media3.common.audio.SpeedChangingAudioProcessor;
 import androidx.media3.common.audio.SpeedProvider;
 import androidx.media3.common.util.Clock;
 import androidx.media3.common.util.ConditionVariable;
-import androidx.media3.common.util.Consumer;
 import androidx.media3.common.util.ExperimentalApi;
 import androidx.media3.common.util.GlUtil;
-import androidx.media3.common.util.GlUtil.GlException;
 import androidx.media3.common.util.HandlerWrapper;
 import androidx.media3.common.util.Log;
 import androidx.media3.common.util.Size;
@@ -85,7 +76,8 @@ import androidx.media3.effect.DebugTraceUtil;
 import androidx.media3.effect.DefaultGlObjectsProvider;
 import androidx.media3.effect.DefaultVideoFrameProcessor;
 import androidx.media3.effect.GlTextureFrame;
-import androidx.media3.effect.GlTextureProducer;
+import androidx.media3.effect.PacketConsumer;
+import androidx.media3.effect.PacketConsumerUtil;
 import androidx.media3.effect.SingleInputVideoGraph;
 import androidx.media3.effect.TimestampAdjustment;
 import androidx.media3.exoplayer.DefaultLoadControl;
@@ -119,6 +111,7 @@ import androidx.media3.exoplayer.video.VideoSink;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
@@ -166,7 +159,7 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     private AudioAttributes audioAttributes;
     private boolean handleAudioFocus;
     private VideoGraph.@MonotonicNonNull Factory videoGraphFactory;
-    private @MonotonicNonNull Consumer<List<GlTextureFrame>> frameConsumer;
+    private PacketConsumer.@MonotonicNonNull Factory<List<GlTextureFrame>> packetConsumerFactory;
 
     private boolean videoPrewarmingEnabled;
     private boolean enableReplayableCache;
@@ -436,25 +429,28 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     }
 
     /**
-     * Sets the FrameConsumer that will apply effects and render the frames.
+     * Sets the {@link PacketConsumer.Factory} that will create the {@link PacketConsumer} to apply
+     * effects and render the frames.
      *
      * <p>If set, {@link #videoGraphFactory} is ignored.
+     *
+     * <p>The created {@link PacketConsumer} will be released on {@link
+     * CompositionPlayer#release()}.
      *
      * <p>The default value is {@code null}.
      *
      * <p>This method is experimental and will be renamed or removed in a future release.
      *
-     * @param frameConsumer The frameConsumer.
+     * @param packetConsumerFactory The {@link PacketConsumer.Factory}.
      * @throws IllegalStateException if a {@link VideoGraph.Factory} is {@linkplain
      *     #setVideoGraphFactory set}.
      */
-    // TODO: b/449957503 - This is a placeholder, update it with the finalised FrameConsumer
-    //  interface and make public.
-    @RestrictTo(Scope.LIBRARY)
+    @ExperimentalApi
     @CanIgnoreReturnValue
-    public Builder experimentalSetFrameConsumer(Consumer<List<GlTextureFrame>> frameConsumer) {
+    public Builder setPacketConsumerFactory(
+        PacketConsumer.Factory<List<GlTextureFrame>> packetConsumerFactory) {
       checkState(videoGraphFactory == null);
-      this.frameConsumer = frameConsumer;
+      this.packetConsumerFactory = packetConsumerFactory;
       return this;
     }
 
@@ -536,7 +532,7 @@ public final class CompositionPlayer extends SimpleBasePlayer {
   private final GlObjectsProvider glObjectsProvider;
   @Nullable private final ExecutorService executorService;
   @Nullable private final CompositionVideoPacketReleaseControl videoPacketReleaseControl;
-  @Nullable private final Consumer<List<GlTextureFrame>> frameConsumer;
+  @Nullable private final PacketConsumer<List<GlTextureFrame>> packetConsumer;
 
   /** Maps from input index to whether the video track is selected in that sequence. */
   private final SparseBooleanArray videoTracksSelected;
@@ -550,7 +546,7 @@ public final class CompositionPlayer extends SimpleBasePlayer {
   private @MonotonicNonNull Composition composition;
   private @MonotonicNonNull Size videoOutputSize;
   private @MonotonicNonNull PlaybackVideoGraphWrapper playbackVideoGraphWrapper;
-  private @MonotonicNonNull PlaybackAudioGraphWrapper playbackAudioGraphWrapper;
+  private PlaybackAudioGraphWrapper playbackAudioGraphWrapper;
   private @MonotonicNonNull VideoFrameMetadataListener videoFrameMetadataListener;
   private @MonotonicNonNull FrameAggregator frameAggregator;
 
@@ -608,15 +604,17 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     appNeedsToPrepareCompositionPlayer = true;
     internalListener = new InternalListener();
     audioFocusManager =
-        new AudioFocusManager(context, applicationHandler.getLooper(), internalListener);
+        new AudioFocusManager(
+            context, applicationHandler.getLooper(), /* playerControl= */ internalListener);
+    playbackAudioGraphWrapper = new PlaybackAudioGraphWrapper(audioMixerFactory, finalAudioSink);
     glObjectsProvider = builder.glObjectsProviderSupplier.get();
-    if (builder.frameConsumer != null) {
+    if (builder.packetConsumerFactory != null) {
       executorService =
           builder.glExecutorService != null
               ? builder.glExecutorService
               : Util.newSingleThreadExecutor("CompositionPlayer:GlThread");
       shouldShutdownExecutorService = builder.glExecutorService == null;
-      frameConsumer = builder.frameConsumer;
+      packetConsumer = builder.packetConsumerFactory.create();
       VideoFrameReleaseControl videoFrameReleaseControl =
           new VideoFrameReleaseControl(
               this.context,
@@ -628,11 +626,16 @@ public final class CompositionPlayer extends SimpleBasePlayer {
               /* allowedJoiningTimeMs= */ 0);
       videoFrameReleaseControl.setClock(clock);
       videoPacketReleaseControl =
-          new CompositionVideoPacketReleaseControl(videoFrameReleaseControl, frameConsumer);
+          new CompositionVideoPacketReleaseControl(
+              context,
+              videoFrameReleaseControl,
+              packetConsumer,
+              executorService,
+              e -> internalListener.onError(VideoFrameProcessingException.from(e)));
     } else {
       executorService = builder.glExecutorService;
       shouldShutdownExecutorService = false;
-      frameConsumer = null;
+      packetConsumer = null;
       frameAggregator = null;
       videoPacketReleaseControl = null;
     }
@@ -892,6 +895,10 @@ public final class CompositionPlayer extends SimpleBasePlayer {
       return Futures.immediateVoidFuture();
     }
 
+    if (videoPacketReleaseControl != null) {
+      videoPacketReleaseControl.release();
+    }
+    audioFocusManager.release();
     checkState(checkNotNull(playbackThread).isAlive());
     // Release the players first so that they stop rendering.
     for (int i = 0; i < playerHolders.size(); i++) {
@@ -900,6 +907,13 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     playerHolders.clear();
     boolean internalPlayerSuccessfullyReleased = checkNotNull(compositionPlayerInternal).release();
     removeSurfaceCallbacks();
+    // TODO: b/449956936 - Sequence releasing PacketConsumer with other internal objects.
+    ListenableFuture<Void> releaseFuture;
+    if (packetConsumer != null) {
+      releaseFuture = PacketConsumerUtil.release(packetConsumer, checkNotNull(executorService));
+    } else {
+      releaseFuture = immediateVoidFuture();
+    }
     // Remove any queued callback from the internal player.
     compositionInternalListenerHandler.removeCallbacksAndMessages(/* token= */ null);
     displaySurface = null;
@@ -919,7 +933,7 @@ public final class CompositionPlayer extends SimpleBasePlayer {
       executorService.shutdown();
     }
     analyticsCollector.release();
-    return Futures.immediateVoidFuture();
+    return releaseFuture;
   }
 
   @Override
@@ -977,9 +991,8 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     for (int i = 0; i < playerHolders.size(); i++) {
       playerHolders.get(i).player.seekTo(positionMs);
     }
-    if (frameConsumer != null) {
+    if (packetConsumer != null) {
       checkNotNull(videoPacketReleaseControl).reset();
-      checkNotNull(frameAggregator).releaseAllFrames();
     }
     compositionPlayerInternal.endSeek();
     return Futures.immediateVoidFuture();
@@ -1050,10 +1063,14 @@ public final class CompositionPlayer extends SimpleBasePlayer {
       List<EditedMediaItem> newEditedMediaItems = new ArrayList<>();
       for (EditedMediaItem item : sequence.editedMediaItems) {
         if (item.speedProvider != SpeedProvider.DEFAULT) {
+          // SpeedChangingMediaSource already adjusts the stream's timestamps, so
+          // SpeedChangingAudioProcessor does not need to adjust them.
           newEditedMediaItems.add(
               item.buildUpon()
-                  .setSpeedChangingEffects(
-                      new SpeedChangingAudioProcessor(item.speedProvider), /* effect= */ null)
+                  .setPreProcessingAudioProcessors(
+                      ImmutableList.of(
+                          new SpeedChangingAudioProcessor(
+                              item.speedProvider, /* shouldAdjustTimestamps= */ false)))
                   .build());
         } else {
           newEditedMediaItems.add(deactivateSpeedAdjustingVideoEffects(item));
@@ -1244,14 +1261,10 @@ public final class CompositionPlayer extends SimpleBasePlayer {
 
   private void prepareCompositionPlayerInternal() {
     // PlaybackAudioGraphWrapper needs to be recreated everytime a new composition is set.
-    if (playbackAudioGraphWrapper != null) {
-      playbackAudioGraphWrapper.release();
-    }
-    playbackAudioGraphWrapper =
-        new PlaybackAudioGraphWrapper(audioMixerFactory, checkNotNull(finalAudioSink));
     if (compositionPlayerInternalPrepared) {
+      playbackAudioGraphWrapper = new PlaybackAudioGraphWrapper(audioMixerFactory, finalAudioSink);
       checkNotNull(compositionPlayerInternal)
-          .setPlaybackAudioGraphWrapper(playbackAudioGraphWrapper);
+          .replacePlaybackAudioGraphWrapper(playbackAudioGraphWrapper);
       return;
     }
 
@@ -1300,7 +1313,7 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     }
     playerHolders.clear();
 
-    if (frameConsumer != null) {
+    if (packetConsumer != null) {
       if (frameAggregator != null) {
         frameAggregator.releaseAllFrames();
       }
@@ -1345,10 +1358,7 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     EditedMediaItemSequence sequence = newComposition.sequences.get(sequenceIndex);
     // The underlying player needs to be recreated so that the audio renderer can use the new
     // AudioSink from the newly created PlaybackAudioGraphWrapper.
-    SequencePlayerHolder playerHolder =
-        createSequencePlayer(
-            sequenceIndex,
-            newComposition.hdrMode == Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_MEDIACODEC);
+    SequencePlayerHolder playerHolder = createSequencePlayer(newComposition, sequenceIndex);
     playerHolders.add(playerHolder);
     ExoPlayer player = playerHolder.player;
 
@@ -1379,22 +1389,43 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     }
   }
 
-  private SequencePlayerHolder createSequencePlayer(
-      int sequenceIndex, boolean requestMediaCodecToneMapping) {
-    VideoSink inputSink =
-        frameConsumer != null
-            ? getFrameConsumerInputSink(sequenceIndex)
-            : checkNotNull(playbackVideoGraphWrapper).getSink(sequenceIndex);
-    SequenceRenderersFactory renderersFactory =
-        SequenceRenderersFactory.create(
-            context,
-            checkNotNull(playbackAudioGraphWrapper),
-            inputSink,
-            imageDecoderFactory,
-            /* inputIndex= */ sequenceIndex,
-            videoPrewarmingEnabled);
-    if (frameConsumer != null && sequenceIndex == 0) {
-      renderersFactory.setOnRenderListener(checkNotNull(videoPacketReleaseControl));
+  private SequencePlayerHolder createSequencePlayer(Composition composition, int sequenceIndex) {
+    boolean requestMediaCodecToneMapping =
+        composition.hdrMode == Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_MEDIACODEC;
+    SequenceRenderersFactory renderersFactory;
+    if (packetConsumer != null) {
+      // TODO: b/449957106 - support component reuse, and decouple the Composition from the
+      // CompositionTextureListener.
+      CompositionTextureListener textureListener =
+          new CompositionTextureListener(
+              composition,
+              sequenceIndex,
+              checkNotNull(frameAggregator),
+              checkNotNull(executorService));
+      VideoSink inputSink = getFrameConsumerInputSink(textureListener);
+      renderersFactory =
+          new SequenceRenderersFactory(
+              context,
+              checkNotNull(playbackAudioGraphWrapper),
+              inputSink,
+              imageDecoderFactory,
+              /* inputIndex= */ sequenceIndex,
+              videoPrewarmingEnabled,
+              videoPacketReleaseControl,
+              textureListener);
+
+    } else {
+      VideoSink inputSink = checkNotNull(playbackVideoGraphWrapper).getSink(sequenceIndex);
+      renderersFactory =
+          new SequenceRenderersFactory(
+              context,
+              checkNotNull(playbackAudioGraphWrapper),
+              inputSink,
+              imageDecoderFactory,
+              /* inputIndex= */ sequenceIndex,
+              videoPrewarmingEnabled,
+              /* compositionRendererListener= */ null,
+              /* compositionTextureListener= */ null);
     }
     SequencePlayerHolder playerHolder =
         new SequencePlayerHolder(
@@ -1514,7 +1545,14 @@ public final class CompositionPlayer extends SimpleBasePlayer {
                   .add(C.TRACK_TYPE_IMAGE)
                   .build();
         }
-        mainMediaSource = new FilteringMediaSource(mainMediaSource, sequenceTrackTypes);
+        // If the item is configured to remove video, this ensures the video track is excluded
+        // from the set of allowed track types in the sequence.
+        ImmutableSet<@C.TrackType Integer> includedTrackTypes =
+            editedMediaItem.removeVideo
+                ? Sets.difference(sequenceTrackTypes, ImmutableSet.of(C.TRACK_TYPE_VIDEO))
+                    .immutableCopy()
+                : ImmutableSet.copyOf(sequenceTrackTypes);
+        mainMediaSource = new FilteringMediaSource(mainMediaSource, includedTrackTypes);
       }
       if (shouldGenerateBlankFrames) {
         return new MergingMediaSource(silenceMediaSource, blankFramesMediaSource, mainMediaSource);
@@ -1830,20 +1868,40 @@ public final class CompositionPlayer extends SimpleBasePlayer {
     return false;
   }
 
-  private VideoSink getFrameConsumerInputSink(int sequenceIndex) {
-    checkState(frameConsumer != null);
-    TextureListener textureListener = new TextureListener(sequenceIndex);
+  private VideoSink getFrameConsumerInputSink(CompositionTextureListener textureListener) {
+    checkState(packetConsumer != null);
     PlaybackVideoGraphWrapper singleInputVideoGraphWrapper =
         buildSingleInputPlaybackVideoGraphWrapper(textureListener);
     // This PlaybackVideoGraphWrapper can be started immediately and does not need to be stopped, as
     // frames are held by the CompositionVideoPacketReleaseControl which is started and stopped when
     // rendering is started and stopped.
     singleInputVideoGraphWrapper.startRendering();
-    return singleInputVideoGraphWrapper.getSink(/* inputIndex= */ 0);
+    VideoSink videoGraphWrapperSink = singleInputVideoGraphWrapper.getSink(/* inputIndex= */ 0);
+    return new ForwardingVideoSink(videoGraphWrapperSink) {
+
+      @Override
+      public boolean isReady(boolean otherwiseReady) {
+        // TODO: b/449957627- Do not use PlaybackVideoGraphWrapper or VideoSink. Instead, rely on
+        // each MediaCodecVideoRenderer's release control to determine whether the renderer is
+        // ready.
+
+        // The renderer state should not depend on effects processing. As a temporary workaround,
+        // allow playback to start as soon as the renderer has input data (otherwiseReady).
+        return otherwiseReady && isInitialized();
+      }
+
+      @Override
+      public void flush(boolean resetPosition) {
+        if (super.isInitialized()) {
+          textureListener.willFlush();
+        }
+        super.flush(resetPosition);
+      }
+    };
   }
 
   private PlaybackVideoGraphWrapper buildSingleInputPlaybackVideoGraphWrapper(
-      TextureListener textureListener) {
+      CompositionTextureListener textureListener) {
     DefaultVideoFrameProcessor.Factory.Builder videoFrameProcessorFactoryBuilder =
         new DefaultVideoFrameProcessor.Factory.Builder()
             .setTextureOutput(textureListener, /* textureOutputCapacity= */ 2)
@@ -1866,34 +1924,15 @@ public final class CompositionPlayer extends SimpleBasePlayer {
             .experimentalSetLateThresholdToDropInputUs(lateThresholdToDropInputUs)
             .build();
     singleInputVideoGraphWrapper.setTotalVideoInputCount(1);
+    singleInputVideoGraphWrapper.addListener(internalListener);
+    singleInputVideoGraphWrapper.addListener(
+        new PlaybackVideoGraphWrapper.Listener() {
+          @Override
+          public void onEnded(long finalFramePresentationTimeUs) {
+            textureListener.onEnded();
+          }
+        });
     return singleInputVideoGraphWrapper;
-  }
-
-  private final class TextureListener implements GlTextureProducer.Listener {
-
-    private final int sequenceIndex;
-
-    private TextureListener(int sequenceIndex) {
-      this.sequenceIndex = sequenceIndex;
-    }
-
-    @Override
-    public void onTextureRendered(
-        GlTextureProducer textureProducer,
-        GlTextureInfo outputTexture,
-        long presentationTimeUs,
-        long syncObject) {
-      // TODO: b/430250432 - Add syncObject to GlTextureFrame.
-      GlTextureFrame textureFrame =
-          new GlTextureFrame.Builder(
-                  outputTexture,
-                  directExecutor(),
-                  (u) -> textureProducer.releaseOutputTexture(presentationTimeUs))
-              .setPresentationTimeUs(presentationTimeUs)
-              .build();
-
-      checkNotNull(frameAggregator).queueFrame(textureFrame, sequenceIndex);
-    }
   }
 
   /**
@@ -2228,59 +2267,6 @@ public final class CompositionPlayer extends SimpleBasePlayer {
                   "Error processing video frames",
                   videoFrameProcessingException,
                   PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED));
-    }
-  }
-
-  /**
-   * A {@link GlObjectsProvider} that reuses a single {@link EGLContext} across {@link
-   * #createEglContext} calls.
-   */
-  /* package */ static final class SingleContextGlObjectsProvider implements GlObjectsProvider {
-    private final GlObjectsProvider glObjectsProvider;
-    private @MonotonicNonNull EGLContext singleEglContext;
-
-    public SingleContextGlObjectsProvider() {
-      this.glObjectsProvider = new DefaultGlObjectsProvider();
-    }
-
-    @Override
-    public EGLContext createEglContext(
-        EGLDisplay eglDisplay, int openGlVersion, int[] configAttributes) throws GlException {
-      if (singleEglContext == null) {
-        singleEglContext =
-            glObjectsProvider.createEglContext(eglDisplay, openGlVersion, configAttributes);
-      }
-      return singleEglContext;
-    }
-
-    @Override
-    public EGLSurface createEglSurface(
-        EGLDisplay eglDisplay,
-        Object surface,
-        @C.ColorTransfer int colorTransfer,
-        boolean isEncoderInputSurface)
-        throws GlException {
-      return glObjectsProvider.createEglSurface(
-          eglDisplay, surface, colorTransfer, isEncoderInputSurface);
-    }
-
-    @Override
-    public EGLSurface createFocusedPlaceholderEglSurface(
-        EGLContext eglContext, EGLDisplay eglDisplay) throws GlException {
-      return glObjectsProvider.createFocusedPlaceholderEglSurface(eglContext, eglDisplay);
-    }
-
-    @Override
-    public GlTextureInfo createBuffersForTexture(int texId, int width, int height)
-        throws GlException {
-      return glObjectsProvider.createBuffersForTexture(texId, width, height);
-    }
-
-    @Override
-    public void release(EGLDisplay eglDisplay) throws GlException {
-      if (singleEglContext != null) {
-        destroyEglContext(eglDisplay, singleEglContext);
-      }
     }
   }
 }

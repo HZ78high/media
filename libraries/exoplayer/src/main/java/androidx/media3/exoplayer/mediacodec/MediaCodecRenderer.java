@@ -32,6 +32,7 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.max;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
+import android.content.Context;
 import android.media.MediaCodec;
 import android.media.MediaCodec.CodecException;
 import android.media.MediaCrypto;
@@ -59,6 +60,7 @@ import androidx.media3.decoder.CryptoConfig;
 import androidx.media3.decoder.DecoderInputBuffer;
 import androidx.media3.decoder.DecoderInputBuffer.InsufficientCapacityException;
 import androidx.media3.exoplayer.BaseRenderer;
+import androidx.media3.exoplayer.CodecParameters;
 import androidx.media3.exoplayer.DecoderCounters;
 import androidx.media3.exoplayer.DecoderReuseEvaluation;
 import androidx.media3.exoplayer.DecoderReuseEvaluation.DecoderDiscardReasons;
@@ -76,6 +78,7 @@ import androidx.media3.exoplayer.source.SampleStream;
 import androidx.media3.exoplayer.source.SampleStream.ReadDataResult;
 import androidx.media3.exoplayer.source.SampleStream.ReadFlags;
 import androidx.media3.extractor.OpusUtil;
+import com.google.common.collect.ImmutableSet;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -83,8 +86,11 @@ import java.lang.annotation.Target;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.RequiresNonNull;
@@ -325,6 +331,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
   private static final int ADAPTATION_WORKAROUND_SLICE_WIDTH_HEIGHT = 32;
 
+  private final Context context;
   private final MediaCodecAdapter.Factory codecAdapterFactory;
   private final MediaCodecSelector mediaCodecSelector;
   private final boolean enableDecoderFallback;
@@ -405,8 +412,12 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   private boolean experimentalEnableProcessedStreamChangedAtStart;
   private boolean hasSkippedFlushAndWaitingForQueueInputBuffer;
   private long skippedFlushOffsetUs;
+  private CodecParameters activeCodecParameters;
+  private CodecParameters lastDispatchedCodecParameters;
+  private ImmutableSet<String> subscribedCodecParameterKeys;
 
   /**
+   * @param context A context.
    * @param trackType The {@link C.TrackType track type} that the renderer handles.
    * @param codecAdapterFactory A factory for {@link MediaCodecAdapter} instances.
    * @param mediaCodecSelector A decoder selector.
@@ -418,12 +429,14 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    *     explicitly using {@link MediaFormat#KEY_OPERATING_RATE}).
    */
   public MediaCodecRenderer(
+      Context context,
       @C.TrackType int trackType,
       MediaCodecAdapter.Factory codecAdapterFactory,
       MediaCodecSelector mediaCodecSelector,
       boolean enableDecoderFallback,
       float assumedMinimumCodecOperatingRate) {
     super(trackType);
+    this.context = context.getApplicationContext();
     this.codecAdapterFactory = codecAdapterFactory;
     this.mediaCodecSelector = checkNotNull(mediaCodecSelector);
     this.enableDecoderFallback = enableDecoderFallback;
@@ -462,6 +475,9 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     decoderCounters = new DecoderCounters();
     hasSkippedFlushAndWaitingForQueueInputBuffer = false;
     skippedFlushOffsetUs = 0;
+    this.subscribedCodecParameterKeys = ImmutableSet.of();
+    this.activeCodecParameters = CodecParameters.EMPTY;
+    this.lastDispatchedCodecParameters = CodecParameters.EMPTY;
   }
 
   /**
@@ -874,10 +890,30 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   @Override
   public void handleMessage(@MessageType int messageType, @Nullable Object message)
       throws ExoPlaybackException {
-    if (messageType == MSG_SET_WAKEUP_LISTENER) {
-      wakeupListener = checkNotNull((WakeupListener) message);
-    } else {
-      super.handleMessage(messageType, message);
+    switch (messageType) {
+      case MSG_SET_WAKEUP_LISTENER:
+        wakeupListener = checkNotNull((WakeupListener) message);
+        break;
+      case MSG_SET_CODEC_PARAMETERS:
+        if (Build.VERSION.SDK_INT >= 29) {
+          activeCodecParameters = (CodecParameters) checkNotNull(message);
+
+          @Nullable MediaCodecAdapter codec = getCodec();
+          if (codec != null) {
+            codec.setParameters(activeCodecParameters.toBundle());
+          }
+        }
+        break;
+      case MSG_SET_SUBSCRIBED_CODEC_PARAMETER_KEYS:
+        if (Build.VERSION.SDK_INT >= 29) {
+          @SuppressWarnings("unchecked") // Payload is always a ImmutableSet.
+          ImmutableSet<String> keys = (ImmutableSet<String>) checkNotNull(message);
+          updateCodecSubscriptions(keys);
+        }
+        break;
+      default:
+        super.handleMessage(messageType, message);
+        break;
     }
   }
 
@@ -1106,6 +1142,52 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     return new MediaCodecDecoderException(cause, codecInfo);
   }
 
+  @RequiresApi(29)
+  private void checkAndNotifyCodecParameterChanges(MediaFormat mediaFormat) {
+    if (subscribedCodecParameterKeys.isEmpty()) {
+      return;
+    }
+
+    CodecParameters currentValues =
+        CodecParameters.createFrom(mediaFormat, subscribedCodecParameterKeys).build();
+
+    if (currentValues.equals(lastDispatchedCodecParameters)) {
+      return;
+    }
+
+    lastDispatchedCodecParameters = currentValues;
+    onCodecParametersChanged(currentValues);
+  }
+
+  @RequiresApi(29)
+  private void updateCodecSubscriptions(ImmutableSet<String> newKeys) {
+    if (subscribedCodecParameterKeys.equals(newKeys)) {
+      return;
+    }
+
+    if (Build.VERSION.SDK_INT >= 31) {
+      Set<String> addedKeys = new HashSet<>(newKeys);
+      Set<String> removedKeys = new HashSet<>();
+      for (String oldKey : subscribedCodecParameterKeys) {
+        if (!addedKeys.remove(oldKey)) {
+          removedKeys.add(oldKey);
+        }
+      }
+
+      @Nullable MediaCodecAdapter codec = getCodec();
+      if (codec != null) {
+        if (!removedKeys.isEmpty()) {
+          codec.unsubscribeFromVendorParameters(new ArrayList<>(removedKeys));
+        }
+        if (!addedKeys.isEmpty()) {
+          codec.subscribeToVendorParameters(new ArrayList<>(addedKeys));
+        }
+      }
+    }
+
+    subscribedCodecParameterKeys = newKeys;
+  }
+
   /**
    * Reads from the source when sample data is not required. If a format or an end of stream buffer
    * is read, it will be handled before the call returns.
@@ -1313,7 +1395,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     }
     codecInitializedTimestamp = getClock().elapsedRealtime();
 
-    if (!codecInfo.isFormatSupported(inputFormat)) {
+    if (!codecInfo.isFormatSupported(context, inputFormat)) {
       Log.w(
           TAG,
           Util.formatInvariant(
@@ -1340,6 +1422,10 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
     decoderCounters.decoderInitCount++;
     long elapsed = codecInitializedTimestamp - codecInitializingTimestamp;
+    if (Build.VERSION.SDK_INT >= 31 && !subscribedCodecParameterKeys.isEmpty()) {
+      checkNotNull(getCodec())
+          .subscribeToVendorParameters(new ArrayList<>(subscribedCodecParameterKeys));
+    }
     onCodecInitialized(codecName, configuration, codecInitializedTimestamp, elapsed);
     if (DEBUG_LOG_ENABLED) {
       int trackType = getTrackType();
@@ -2215,6 +2301,9 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       shouldSkipAdaptationWorkaroundOutputBuffer = true;
       return;
     }
+    if (SDK_INT >= 29) {
+      checkAndNotifyCodecParameterChanges(mediaFormat);
+    }
     codecOutputMediaFormat = mediaFormat;
     codecOutputMediaFormatChanged = true;
   }
@@ -2270,6 +2359,14 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       boolean isLastBuffer,
       Format format)
       throws ExoPlaybackException;
+
+  /**
+   * Called when one or more of the subscribed codec parameters have changed.
+   *
+   * @param codecParameters A {@link CodecParameters} instance containing the current values for the
+   *     subscribed keys as reported by the underlying codec.
+   */
+  protected abstract void onCodecParametersChanged(CodecParameters codecParameters);
 
   /**
    * Incrementally renders any remaining output.
@@ -2331,6 +2428,18 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   /**
+   * Returns the largest presentation time of a buffer queued to the decoder.
+   *
+   * <p>If a buffer has not yet been queued to the decoder then the return value will be {@link
+   * C#TIME_UNSET}. The value is reset when the decoder is flushed or released.
+   *
+   * @return The largest presentation time of buffers queued to the decoder.
+   */
+  protected long getLargestQueuedPresentationTimeUs() {
+    return largestQueuedPresentationTimeUs;
+  }
+
+  /**
    * Returns the offset that should be subtracted from {@code bufferPresentationTimeUs} in {@link
    * #processOutputBuffer(long, long, MediaCodecAdapter, ByteBuffer, int, int, int, long, boolean,
    * boolean, Format)} to get the playback position with respect to the media.
@@ -2342,6 +2451,13 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   /** Returns the start position of the current output stream in microseconds. */
   protected final long getOutputStreamStartPositionUs() {
     return outputStreamInfo.startPositionUs;
+  }
+
+  /** Applies the currently active {@link CodecParameters} to the given {@link MediaFormat}. */
+  protected final void applyCodecParametersToMediaFormat(MediaFormat mediaFormat) {
+    if (SDK_INT >= 29) {
+      activeCodecParameters.applyTo(mediaFormat);
+    }
   }
 
   private void setOutputStreamInfo(OutputStreamInfo outputStreamInfo) {

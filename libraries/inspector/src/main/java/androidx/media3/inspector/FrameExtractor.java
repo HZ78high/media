@@ -16,6 +16,8 @@
 
 package androidx.media3.inspector;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.ColorSpace;
@@ -29,6 +31,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.Effect;
 import androidx.media3.common.GlObjectsProvider;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaLibraryInfo;
 import androidx.media3.common.util.NullableType;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.effect.DefaultGlObjectsProvider;
@@ -36,6 +39,8 @@ import androidx.media3.effect.RgbMatrix;
 import androidx.media3.exoplayer.DecoderCounters;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.source.MediaSource;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -70,6 +75,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @UnstableApi
 public final class FrameExtractor implements AutoCloseable {
 
+  static {
+    MediaLibraryInfo.registerModule("media3.inspector");
+  }
+
   /** A builder for {@link FrameExtractor} instances. */
   public static final class Builder {
     private final Context context;
@@ -79,6 +88,7 @@ public final class FrameExtractor implements AutoCloseable {
     private MediaCodecSelector mediaCodecSelector;
     private boolean extractHdrFrames;
     @Nullable private GlObjectsProvider glObjectsProvider;
+    @Nullable private MediaSource.Factory mediaSourceFactory;
 
     /**
      * Creates a new instance.
@@ -174,6 +184,19 @@ public final class FrameExtractor implements AutoCloseable {
       return this;
     }
 
+    /**
+     * Sets the {@link MediaSource.Factory} to be used to create the {@link MediaSource} for the
+     * given {@link MediaItem}. If not set, a {@link DefaultMediaSourceFactory} will be used.
+     *
+     * @param mediaSourceFactory The {@link MediaSource.Factory}.
+     * @return This builder.
+     */
+    @CanIgnoreReturnValue
+    public Builder setMediaSourceFactory(MediaSource.Factory mediaSourceFactory) {
+      this.mediaSourceFactory = checkNotNull(mediaSourceFactory);
+      return this;
+    }
+
     /** Builds a new {@link FrameExtractor} instance. */
     public FrameExtractor build() {
       return new FrameExtractor(this);
@@ -202,6 +225,7 @@ public final class FrameExtractor implements AutoCloseable {
   private final MediaCodecSelector mediaCodecSelector;
   private final boolean extractHdrFrames;
   @Nullable private final GlObjectsProvider glObjectsProvider;
+  @Nullable private MediaSource.Factory mediaSourceFactory;
   private final AtomicBoolean released;
 
   private FrameExtractor(Builder builder) {
@@ -212,6 +236,7 @@ public final class FrameExtractor implements AutoCloseable {
     this.mediaCodecSelector = builder.mediaCodecSelector;
     this.extractHdrFrames = builder.extractHdrFrames;
     this.glObjectsProvider = builder.glObjectsProvider;
+    this.mediaSourceFactory = builder.mediaSourceFactory;
     released = new AtomicBoolean(false);
     FrameExtractorInternal.getInstance().addReference();
   }
@@ -236,6 +261,7 @@ public final class FrameExtractor implements AutoCloseable {
             this.seekParameters,
             this.mediaCodecSelector,
             this.glObjectsProvider,
+            this.mediaSourceFactory,
             this.extractHdrFrames,
             positionMs);
 
@@ -255,6 +281,7 @@ public final class FrameExtractor implements AutoCloseable {
             SeekParameters.NEXT_SYNC,
             mediaCodecSelector,
             glObjectsProvider,
+            mediaSourceFactory,
             extractHdrFrames,
             /* positionMs= */ C.TIME_UNSET);
     return FrameExtractorInternal.getInstance().submitTask(request);

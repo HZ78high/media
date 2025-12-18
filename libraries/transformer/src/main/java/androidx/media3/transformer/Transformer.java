@@ -47,6 +47,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.DebugViewProvider;
 import androidx.media3.common.Effect;
 import androidx.media3.common.Format;
+import androidx.media3.common.GlObjectsProvider;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaLibraryInfo;
 import androidx.media3.common.MimeTypes;
@@ -63,7 +64,8 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.util.Util;
 import androidx.media3.effect.DebugTraceUtil;
 import androidx.media3.effect.DefaultVideoFrameProcessor;
-import androidx.media3.effect.TimestampAdjustment;
+import androidx.media3.effect.GlTextureFrame;
+import androidx.media3.effect.PacketProcessor;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.muxer.Muxer;
 import com.google.common.collect.ImmutableList;
@@ -81,6 +83,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import org.checkerframework.checker.nullness.qual.EnsuresNonNull;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
@@ -141,6 +144,12 @@ public final class Transformer {
     private EditingMetricsCollector.MetricsReporter.@MonotonicNonNull Factory
         metricsReporterFactory;
 
+    @Nullable
+    private PacketProcessor<List<? extends GlTextureFrame>, GlTextureFrame> packetProcessor;
+
+    @Nullable private GlObjectsProvider glObjectsProvider;
+    @Nullable private ExecutorService glExecutorService;
+
     /**
      * Creates a builder with default values.
      *
@@ -159,7 +168,7 @@ public final class Transformer {
       looper = Util.getCurrentOrMainLooper();
       debugViewProvider = DebugViewProvider.NONE;
       clock = Clock.DEFAULT;
-      listeners = new ListenerSet<>(looper, clock);
+      listeners = new ListenerSet<>(looper);
       if (SDK_INT >= 35) {
         usePlatformDiagnostics = true;
         metricsReporterFactory =
@@ -195,6 +204,9 @@ public final class Transformer {
       this.debugViewProvider = transformer.debugViewProvider;
       this.clock = transformer.clock;
       this.metricsReporterFactory = transformer.metricsReporterFactory;
+      this.packetProcessor = transformer.packetProcessor;
+      this.glObjectsProvider = transformer.glObjectsProvider;
+      this.glExecutorService = transformer.glExecutorService;
     }
 
     /**
@@ -647,9 +659,8 @@ public final class Transformer {
       }
       checkState(
           !mp4EditListTrimEnabled || muxerFactory.supportsWritingNegativeTimestampsInEditList(),
-          String.format(
-              "Muxer.Factory %s does not support writing negative timestamps to an edit list.",
-              muxerFactory));
+          "Muxer.Factory %s does not support writing negative timestamps to an edit list.",
+          muxerFactory);
       return new Transformer(
           context,
           transformationRequest,
@@ -673,7 +684,10 @@ public final class Transformer {
           looper,
           debugViewProvider,
           clock,
-          metricsReporterFactory);
+          metricsReporterFactory,
+          packetProcessor,
+          glObjectsProvider,
+          glExecutorService);
     }
 
     private void checkSampleMimeType(String sampleMimeType) {
@@ -867,6 +881,12 @@ public final class Transformer {
   private final ExportResult.Builder exportResultBuilder;
   @Nullable private final EditingMetricsCollector.MetricsReporter.Factory metricsReporterFactory;
 
+  @Nullable
+  private final PacketProcessor<List<? extends GlTextureFrame>, GlTextureFrame> packetProcessor;
+
+  @Nullable private final GlObjectsProvider glObjectsProvider;
+  @Nullable private final ExecutorService glExecutorService;
+
   @Nullable private TransformerInternal transformerInternal;
   @Nullable private MuxerWrapper remuxingMuxerWrapper;
   private @MonotonicNonNull Composition composition;
@@ -905,7 +925,10 @@ public final class Transformer {
       Looper looper,
       DebugViewProvider debugViewProvider,
       Clock clock,
-      @Nullable EditingMetricsCollector.MetricsReporter.Factory metricsReporterFactory) {
+      @Nullable EditingMetricsCollector.MetricsReporter.Factory metricsReporterFactory,
+      @Nullable PacketProcessor<List<? extends GlTextureFrame>, GlTextureFrame> packetProcessor,
+      @Nullable GlObjectsProvider glObjectsProvider,
+      @Nullable ExecutorService glExecutorService) {
     checkState(!removeAudio || !removeVideo, "Audio and video cannot both be removed.");
     this.context = context;
     this.transformationRequest = transformationRequest;
@@ -929,6 +952,9 @@ public final class Transformer {
     this.looper = looper;
     this.debugViewProvider = debugViewProvider;
     this.clock = clock;
+    this.packetProcessor = packetProcessor;
+    this.glObjectsProvider = glObjectsProvider;
+    this.glExecutorService = glExecutorService;
     this.metricsReporterFactory = metricsReporterFactory;
     transformerState = TRANSFORMER_STATE_PROCESS_FULL_INPUT;
     applicationHandler = clock.createHandler(looper, /* callback= */ null);
@@ -1081,8 +1107,9 @@ public final class Transformer {
    * @throws IllegalStateException If this method is called from the wrong thread.
    * @throws IllegalStateException If an export is already in progress.
    */
+  // TODO: b/430250222 - Migrate to new Builder method.
+  @SuppressWarnings("deprecation")
   public void start(EditedMediaItem editedMediaItem, String path) {
-    // TODO: b/430250222 - Migrate to new Builder method.
     start(
         new Composition.Builder(new EditedMediaItemSequence.Builder(editedMediaItem).build())
             .build(),
@@ -1293,6 +1320,9 @@ public final class Transformer {
             (progressState == PROGRESS_STATE_AVAILABLE)
                 ? progressHolder.progress
                 : C.PERCENTAGE_UNSET;
+        if (editingMetricsCollector == null) {
+          LogSessionId unused = setUpMetricsCollection();
+        }
         checkNotNull(editingMetricsCollector).onExportCancelled(progressPercentage);
       }
     }
@@ -1366,10 +1396,9 @@ public final class Transformer {
   }
 
   private static EditedMediaItem addSpeedChangingEffects(EditedMediaItem item) {
-    SpeedChangingAudioProcessor processor = new SpeedChangingAudioProcessor(item.speedProvider);
-    TimestampAdjustment effect =
-        new TimestampAdjustment(processor::getSpeedAdjustedTimeAsync, item.speedProvider);
-    return item.buildUpon().setSpeedChangingEffects(processor, effect).build();
+    SpeedChangingAudioProcessor processor =
+        new SpeedChangingAudioProcessor(item.speedProvider, /* shouldAdjustTimestamps= */ false);
+    return item.buildUpon().setPreProcessingAudioProcessors(ImmutableList.of(processor)).build();
   }
 
   private void maybeInitializeExportWatchdogTimer() {
@@ -1726,16 +1755,7 @@ public final class Transformer {
       transformationRequest =
           transformationRequest.buildUpon().setHdrMode(composition.hdrMode).build();
     }
-    LogSessionId logSessionId = null;
-    if (canCollectEditingMetrics()) {
-      EditingMetricsCollector.MetricsReporter metricsReporter =
-          checkNotNull(metricsReporterFactory).create();
-      if (metricsReporter instanceof EditingMetricsCollector.DefaultMetricsReporter) {
-        logSessionId =
-            ((EditingMetricsCollector.DefaultMetricsReporter) metricsReporter).getLogSessionId();
-      }
-      editingMetricsCollector = prepareEditingMetricsCollector(metricsReporter);
-    }
+    LogSessionId logSessionId = setUpMetricsCollection();
     FallbackListener fallbackListener =
         new FallbackListener(
             checkNotNull(this.originalComposition),
@@ -1763,6 +1783,9 @@ public final class Transformer {
             applicationHandler,
             debugViewProvider,
             clock,
+            packetProcessor,
+            glExecutorService,
+            glObjectsProvider,
             initialTimestampOffsetUs,
             logSessionId,
             shouldApplyMp4EditListTrim(),
@@ -1792,10 +1815,28 @@ public final class Transformer {
           (progressState == PROGRESS_STATE_AVAILABLE)
               ? progressHolder.progress
               : C.PERCENTAGE_UNSET;
+      if (editingMetricsCollector == null) {
+        LogSessionId unused = setUpMetricsCollection();
+      }
       checkNotNull(editingMetricsCollector)
           .onExportError(progressPercentage, exception, exportResult, isExportResumed());
     }
     transformerState = TRANSFORMER_STATE_PROCESS_FULL_INPUT;
+  }
+
+  @Nullable
+  private LogSessionId setUpMetricsCollection() {
+    LogSessionId logSessionId = null;
+    if (canCollectEditingMetrics()) {
+      EditingMetricsCollector.MetricsReporter metricsReporter =
+          checkNotNull(metricsReporterFactory).create();
+      if (metricsReporter instanceof EditingMetricsCollector.DefaultMetricsReporter) {
+        logSessionId =
+            ((EditingMetricsCollector.DefaultMetricsReporter) metricsReporter).getLogSessionId();
+      }
+      editingMetricsCollector = prepareEditingMetricsCollector(metricsReporter);
+    }
+    return logSessionId;
   }
 
   // This method is safe to have because it's called inside a canCollectEditingMetrics() check which

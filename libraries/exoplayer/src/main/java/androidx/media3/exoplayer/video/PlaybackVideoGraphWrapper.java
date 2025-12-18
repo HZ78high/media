@@ -102,6 +102,9 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
      * @param videoFrameProcessingException The error.
      */
     default void onError(VideoFrameProcessingException videoFrameProcessingException) {}
+
+    /** Called when an input sequence ends. */
+    default void onEnded(long finalFramePresentationTimeUs) {}
   }
 
   /** A builder for {@link PlaybackVideoGraphWrapper} instances. */
@@ -544,7 +547,9 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
 
   @Override
   public void onEnded(long finalFramePresentationTimeUs) {
-    // Ignored.
+    for (PlaybackVideoGraphWrapper.Listener listener : listeners) {
+      listener.onEnded(finalFramePresentationTimeUs);
+    }
   }
 
   @Override
@@ -696,8 +701,12 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
       onOutputStreamChanged();
     }
     lastOutputFramePresentationTimeUs = C.TIME_UNSET;
-    finalFramePresentationTimeUs = C.TIME_UNSET;
-    hasSignaledEndOfVideoGraphOutputStream = false;
+    if (resetPosition) {
+      // If not resetting position, preserve the EOS state, this is necessary in operations like
+      // redraw which relies on flushing, but does not reset position.
+      finalFramePresentationTimeUs = C.TIME_UNSET;
+      hasSignaledEndOfVideoGraphOutputStream = false;
+    }
     // Handle pending video graph callbacks to ensure video size changes reach the video render
     // control.
     checkNotNull(handler).post(() -> pendingFlushCount--);
@@ -1259,8 +1268,15 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
       VideoGraph.Factory factory;
       try {
         // LINT.IfChange
-        Class<?> singleInputVideoGraphFactoryClass =
-            Class.forName("androidx.media3.effect.SingleInputVideoGraph$Factory");
+        // b/463697143: Obfuscate class name to bypass R8/AppReduce static analysis.
+        @SuppressWarnings({"UnnecessaryStringBuilder", "RedundantStringBuilderAppend"})
+        String className =
+            new StringBuilder()
+                .append("androidx.media3.effect.")
+                .append("SingleInputVideoGraph")
+                .append("$Factory")
+                .toString();
+        Class<?> singleInputVideoGraphFactoryClass = Class.forName(className);
         factory =
             (VideoGraph.Factory)
                 singleInputVideoGraphFactoryClass
@@ -1300,8 +1316,15 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
             () -> {
               try {
                 // LINT.IfChange
-                return Class.forName(
-                    "androidx.media3.effect.DefaultVideoFrameProcessor$Factory$Builder");
+                // b/463697143: Obfuscate class name to bypass R8/AppReduce static analysis.
+                @SuppressWarnings({"UnnecessaryStringBuilder", "RedundantStringBuilderAppend"})
+                String className =
+                    new StringBuilder()
+                        .append("androidx.media3.effect.")
+                        .append("DefaultVideoFrameProcessor")
+                        .append("$Factory$Builder")
+                        .toString();
+                return Class.forName(className);
                 // LINT.ThenChange(../../../../../../../proguard-rules.txt)
               } catch (Exception e) {
                 throw new IllegalStateException(e);
@@ -1324,6 +1347,7 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
         VideoFrameProcessor.Listener listener)
         throws VideoFrameProcessingException {
       try {
+        // LINT.IfChange
         Class<?> defaultVideoFrameProcessorFactoryBuilderClass =
             DEFAULT_VIDEO_FRAME_PROCESSOR_FACTORY_BUILDER_CLASS.get();
         Object builder =
@@ -1338,6 +1362,7 @@ public final class PlaybackVideoGraphWrapper implements VideoGraph.Listener {
                     defaultVideoFrameProcessorFactoryBuilderClass
                         .getMethod("build")
                         .invoke(builder));
+        // LINT.ThenChange(../../../../../../../../effect/src/main/java/androidx/media3/effect/DefaultVideoFrameProcessor.java)
         return factory.create(
             context,
             debugViewProvider,

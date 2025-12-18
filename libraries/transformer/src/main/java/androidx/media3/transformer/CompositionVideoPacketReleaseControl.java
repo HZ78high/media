@@ -20,42 +20,62 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
-import android.view.Surface;
+import android.content.Context;
 import androidx.annotation.Nullable;
 import androidx.media3.common.util.Consumer;
+import androidx.media3.common.util.ExperimentalApi;
 import androidx.media3.common.util.SystemClock;
 import androidx.media3.effect.GlTextureFrame;
+import androidx.media3.effect.PacketConsumer;
+import androidx.media3.effect.PacketConsumer.Packet;
+import androidx.media3.effect.PacketConsumerCaller;
 import androidx.media3.exoplayer.ExoPlaybackException;
+import androidx.media3.exoplayer.video.PlaceholderSurface;
 import androidx.media3.exoplayer.video.VideoFrameReleaseControl;
 import androidx.media3.transformer.SequenceRenderersFactory.CompositionRendererListener;
 import com.google.common.collect.ImmutableList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ExecutorService;
 
-// TODO: b/430250432 - This is a placeholder implementation, revisit the threading logic to make it
+// TODO: b/449956936 - This is a placeholder implementation, revisit the threading logic to make it
 //  more robust.
 /** Computes the release time for each {@linkplain List<GlTextureFrame> packet}. */
+@ExperimentalApi
 /* package */ class CompositionVideoPacketReleaseControl implements CompositionRendererListener {
 
   private final VideoFrameReleaseControl videoFrameReleaseControl;
-  private final Consumer<List<GlTextureFrame>> downstreamConsumer;
+  private final PacketConsumerCaller<List<GlTextureFrame>> downstreamConsumer;
   private final ConcurrentLinkedDeque<ImmutableList<GlTextureFrame>> packetQueue;
   private final VideoFrameReleaseControl.FrameReleaseInfo videoFrameReleaseInfo;
+  private final PlaceholderSurface placeholderSurface;
 
   /**
    * Creates a new {@link CompositionVideoPacketReleaseControl}.
    *
    * @param downstreamConsumer Receives the {@linkplain List<GlTextureFrame> packet}, with each
-   *     {@link GlTextureFrame} having the same {@linkplain GlTextureFrame#getReleaseTimeNs()}
-   *     release time}.
+   *     {@link GlTextureFrame} having the same {@linkplain GlTextureFrame#releaseTimeNs} release
+   *     time}.
    */
   public CompositionVideoPacketReleaseControl(
+      Context context,
       VideoFrameReleaseControl videoFrameReleaseControl,
-      Consumer<List<GlTextureFrame>> downstreamConsumer) {
+      PacketConsumer<List<GlTextureFrame>> downstreamConsumer,
+      ExecutorService glExecutorService,
+      Consumer<Exception> exceptionConsumer) {
+    placeholderSurface = PlaceholderSurface.newInstance(context, /* secure= */ false);
+    videoFrameReleaseControl.setOutputSurface(placeholderSurface);
     this.videoFrameReleaseControl = videoFrameReleaseControl;
-    this.downstreamConsumer = downstreamConsumer;
+    this.downstreamConsumer =
+        PacketConsumerCaller.create(downstreamConsumer, glExecutorService, exceptionConsumer);
+    this.downstreamConsumer.run();
     packetQueue = new ConcurrentLinkedDeque<>();
     videoFrameReleaseInfo = new VideoFrameReleaseControl.FrameReleaseInfo();
+  }
+
+  /** Releases the release control. */
+  public void release() {
+    placeholderSurface.release();
   }
 
   /**
@@ -69,9 +89,13 @@ import java.util.concurrent.ConcurrentLinkedDeque;
    */
   public void queue(List<GlTextureFrame> packet) {
     checkArgument(!packet.isEmpty());
+    // TODO: b/449956776 - Propagate EOS signal.
+    if (packet.get(0).equals(GlTextureFrame.END_OF_STREAM_FRAME)) {
+      return;
+    }
     // The VideoFrameReleaseControl cannot currently handle a packet being queued in the past,
     // manually release all frames to handle this discontinuity.
-    // TODO: b/430250432 - There is still a race condition in this check that could result in an
+    // TODO: b/449956936 - There is still a race condition in this check that could result in an
     //  extra dropped frame on a seek backwards, update VideoFrameReleaseControl to handle this
     //  case, or handle queueFrame and onRender on a single internal thread to fix this.
     @Nullable ImmutableList<GlTextureFrame> nextRenderedFrames = packetQueue.peek();
@@ -151,16 +175,6 @@ import java.util.concurrent.ConcurrentLinkedDeque;
     videoFrameReleaseControl.reset();
   }
 
-  // TODO: b/430250432 - Make this work without setting the output Surface.
-  /**
-   * Called when the display surface changed.
-   *
-   * <p>Called on the playback thread.
-   */
-  public void setOutputSurface(@Nullable Surface outputSurface) {
-    videoFrameReleaseControl.setOutputSurface(outputSurface);
-  }
-
   /**
    * Determines how the {@link GlTextureFrame} should be handled given the release action.
    *
@@ -181,13 +195,11 @@ import java.util.concurrent.ConcurrentLinkedDeque;
         releasePacket(packet);
         return true;
       case VideoFrameReleaseControl.FRAME_RELEASE_IMMEDIATELY:
-        setReleaseTimeAndQueueDownstream(
+        return setReleaseTimeAndQueueDownstream(
             packet, /* releaseTimeNs= */ SystemClock.DEFAULT.nanoTime());
-        return true;
       case VideoFrameReleaseControl.FRAME_RELEASE_SCHEDULED:
-        setReleaseTimeAndQueueDownstream(
+        return setReleaseTimeAndQueueDownstream(
             packet, /* releaseTimeNs= */ videoFrameReleaseInfo.getReleaseTimeNs());
-        return true;
       default:
         throw new IllegalStateException(String.valueOf(frameReleaseAction));
     }
@@ -208,14 +220,15 @@ import java.util.concurrent.ConcurrentLinkedDeque;
    *
    * @param packet The {@link ImmutableList<GlTextureFrame>} to send downstream.
    * @param releaseTimeNs The time the {@link GlTextureFrame} should be rendered on screen.
+   * @return {@code true} if the frame was queued downstream.
    */
-  private void setReleaseTimeAndQueueDownstream(
+  private boolean setReleaseTimeAndQueueDownstream(
       ImmutableList<GlTextureFrame> packet, long releaseTimeNs) {
     ImmutableList.Builder<GlTextureFrame> framesWithReleaseTimeBuilder = ImmutableList.builder();
     for (int i = 0; i < packet.size(); i++) {
       framesWithReleaseTimeBuilder.add(updateReleaseTime(packet.get(i), releaseTimeNs));
     }
-    downstreamConsumer.accept(framesWithReleaseTimeBuilder.build());
+    return downstreamConsumer.tryQueuePacket(Packet.of(framesWithReleaseTimeBuilder.build()));
   }
 
   private static GlTextureFrame updateReleaseTime(GlTextureFrame frame, long releaseTimeNs) {
@@ -226,6 +239,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
         .setPresentationTimeUs(frame.presentationTimeUs)
         .setReleaseTimeNs(releaseTimeNs)
         .setMetadata(frame.getMetadata())
+        .setFenceSync(frame.fenceSync)
         .build();
   }
 }

@@ -38,6 +38,7 @@ import android.util.Pair;
 import androidx.annotation.CheckResult;
 import androidx.annotation.Nullable;
 import androidx.media3.common.AdPlaybackState;
+import androidx.media3.common.AdPlaybackState.AdGroup;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
@@ -706,12 +707,12 @@ import java.util.Objects;
           doSomeWork();
           break;
         case MSG_SEEK_TO:
-          seekToInternal((SeekPosition) msg.obj, /* incrementAcks= */ true);
+          seekToInternal((SeekPosition) msg.obj);
           break;
         case MSG_SEEK_COMPLETED_IN_SCRUBBING_MODE:
           seekIsPendingWhileScrubbing = false;
           if (queuedSeekWhileScrubbing != null) {
-            seekToInternal(queuedSeekWhileScrubbing, /* incrementAcks= */ false);
+            seekToInternal(queuedSeekWhileScrubbing);
             queuedSeekWhileScrubbing = null;
           }
           break;
@@ -1557,17 +1558,16 @@ import java.util.Objects;
         : BUFFERING_MAXIMUM_INTERVAL_MS;
   }
 
-  private void seekToInternal(SeekPosition seekPosition, boolean incrementAcks)
-      throws ExoPlaybackException {
-    playbackInfoUpdate.incrementPendingOperationAcks(incrementAcks ? 1 : 0);
+  private void seekToInternal(SeekPosition seekPosition) throws ExoPlaybackException {
     if (seekIsPendingWhileScrubbing) {
       if (queuedSeekWhileScrubbing != null) {
         droppedSeeksWhileScrubbing++;
+        playbackInfoUpdate.incrementPendingOperationAcks(/* operationAcks= */ 1);
       }
       queuedSeekWhileScrubbing = seekPosition;
       return;
     }
-
+    playbackInfoUpdate.incrementPendingOperationAcks(/* operationAcks= */ 1);
     MediaPeriodId periodId;
     long periodPositionUs;
     long requestedContentPositionUs;
@@ -1607,6 +1607,9 @@ import java.util.Objects;
                 ? period.getAdResumePositionUs()
                 : 0;
         seekPositionAdjusted = true;
+        AdGroup adGroup = period.adPlaybackState.getAdGroup(periodId.adGroupIndex);
+        requestedContentPositionUs =
+            max(requestedContentPositionUs, adGroup.timeUs + adGroup.contentResumeOffsetUs);
       } else {
         periodPositionUs = resolvedContentPositionUs;
         seekPositionAdjusted = seekPosition.windowPositionUs == C.TIME_UNSET;
@@ -1795,15 +1798,16 @@ import java.util.Objects;
     return periodPositionUs;
   }
 
-  private boolean shouldSkipKeyFrameReset(MediaPeriodHolder playingPeriod, long positionUs) {
+  private boolean shouldSkipKeyFrameReset(MediaPeriodHolder playingPeriod, long periodPositionUs) {
     if (playbackInfo.timeline.isEmpty() || !playingPeriod.info.id.equals(playbackInfo.periodId)) {
       return false;
     }
+    long rendererPositionUs = playingPeriod.toRendererTime(periodPositionUs);
     boolean renderersSupportSkipKeyFrameReset = true;
     for (RendererHolder renderer : renderers) {
       if (renderer.isRendererEnabled()) {
         renderersSupportSkipKeyFrameReset &=
-            renderer.supportsResetPositionWithoutKeyFrameReset(playingPeriod, positionUs);
+            renderer.supportsResetPositionWithoutKeyFrameReset(playingPeriod, rendererPositionUs);
       }
     }
     if (!renderersSupportSkipKeyFrameReset) {
@@ -1814,7 +1818,7 @@ import java.util.Objects;
             playbackInfo.positionUs, SeekParameters.PREVIOUS_SYNC);
     long adjustedSeekPositionSyncUs =
         playingPeriod.mediaPeriod.getAdjustedSeekPositionUs(
-            positionUs, SeekParameters.PREVIOUS_SYNC);
+            periodPositionUs, SeekParameters.PREVIOUS_SYNC);
     return adjustedCurrentPositionSyncUs == adjustedSeekPositionSyncUs;
   }
 
@@ -1846,6 +1850,11 @@ import java.util.Objects;
   private void setScrubbingModeEnabledInternal(boolean scrubbingModeEnabled)
       throws ExoPlaybackException {
     if (!scrubbingModeEnabled) {
+      if (queuedSeekWhileScrubbing != null
+          && seekIsPendingWhileScrubbing
+          && !handler.hasMessages(MSG_SEEK_COMPLETED_IN_SCRUBBING_MODE)) {
+        droppedSeeksWhileScrubbing++;
+      }
       if (droppedSeeksWhileScrubbing > 0) {
         int localDroppedSeeksCount = droppedSeeksWhileScrubbing;
         applicationLooperHandler.post(
@@ -1856,8 +1865,10 @@ import java.util.Objects;
       handler.removeMessages(MSG_SEEK_COMPLETED_IN_SCRUBBING_MODE);
       if (queuedSeekWhileScrubbing != null) {
         // Immediately seek to the latest received scrub position (interrupting a pending seek).
-        seekToInternal(queuedSeekWhileScrubbing, /* incrementAcks= */ false);
+        seekToInternal(queuedSeekWhileScrubbing);
         queuedSeekWhileScrubbing = null;
+        // Set value to false as subsequent seeks should pre-empt the newly-queued seek.
+        seekIsPendingWhileScrubbing = false;
       }
     }
     this.scrubbingModeEnabled = scrubbingModeEnabled;
@@ -1945,7 +1956,10 @@ import java.util.Objects;
       boolean resetError) {
     handler.removeMessages(MSG_DO_SOME_WORK);
     seekIsPendingWhileScrubbing = false;
-    queuedSeekWhileScrubbing = null;
+    if (queuedSeekWhileScrubbing != null) {
+      playbackInfoUpdate.incrementPendingOperationAcks(/* operationAcks= */ 1);
+      queuedSeekWhileScrubbing = null;
+    }
     pendingRecoverableRendererError = null;
     updateRebufferingState(/* isRebuffering= */ false, /* resetLastRebufferRealtimeMs= */ true);
     mediaClock.stop();
@@ -2536,7 +2550,7 @@ import java.util.Objects;
                 newPeriodId,
                 newPositionUs,
                 newRequestedContentPositionUs,
-                playbackInfo.discontinuityStartPositionUs,
+                reportDiscontinuity ? newPositionUs : playbackInfo.discontinuityStartPositionUs,
                 reportDiscontinuity,
                 timeline.getIndexOfPeriod(oldPeriodUid) == C.INDEX_UNSET
                     ? Player.DISCONTINUITY_REASON_REMOVE
@@ -3672,6 +3686,27 @@ import java.util.Objects;
             newPeriodId.adIndexInAdGroup == period.getFirstAdIndexToPlay(newPeriodId.adGroupIndex)
                 ? period.getAdResumePositionUs()
                 : 0;
+      }
+    } else if (sameOldAndNewPeriodUid && oldPeriodId.isAd()) {
+      // Transition to content after ad.
+      AdPlaybackState adPlaybackState =
+          timeline.getPeriodByUid(newPeriodUid, period).adPlaybackState;
+      AdGroup adGroup = adPlaybackState.getAdGroup(oldPeriodId.adGroupIndex);
+      long contentResumeOffsetUs = adGroup.contentResumeOffsetUs;
+      boolean useRequestedContentPosition =
+          playbackInfo.requestedContentPositionUs != C.TIME_UNSET
+              && adGroup.timeUs != C.TIME_END_OF_SOURCE
+              && adGroup.timeUs + contentResumeOffsetUs <= playbackInfo.requestedContentPositionUs;
+      if (!useRequestedContentPosition
+          && adGroup.count > oldPeriodId.adIndexInAdGroup
+          && adGroup.states[oldPeriodId.adIndexInAdGroup] == AdPlaybackState.AD_STATE_SKIPPED) {
+        // An ad period was skipped and playback continues on content. Apply resume offset.
+        long durationUs = timeline.getPeriodByUid(newPeriodUid, period).durationUs;
+        periodPositionUs =
+            durationUs != C.TIME_UNSET
+                ? min(durationUs - 1, periodPositionUs + contentResumeOffsetUs)
+                : periodPositionUs + contentResumeOffsetUs;
+        newContentPositionUs = periodPositionUs;
       }
     }
 

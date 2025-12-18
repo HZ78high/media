@@ -125,6 +125,7 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
   private float liveMinSpeed;
   private float liveMaxSpeed;
   private boolean parseSubtitlesDuringExtraction;
+  private boolean loadOnlySelectedTracks;
 
   /**
    * Creates a new instance.
@@ -179,8 +180,30 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
   @UnstableApi
   public DefaultMediaSourceFactory(
       DataSource.Factory dataSourceFactory, ExtractorsFactory extractorsFactory) {
+    this(dataSourceFactory, extractorsFactory, new DefaultSubtitleParserFactory());
+  }
+
+  /**
+   * Creates a new instance.
+   *
+   * <p>Note that this constructor is only useful to try and ensure that ExoPlayer's {@link
+   * DefaultDataSource.Factory}, {@link DefaultExtractorsFactory} and {@link
+   * DefaultSubtitleParserFactory} can be removed by ProGuard or R8.
+   *
+   * @param dataSourceFactory A {@link DataSource.Factory} to create {@link DataSource} instances
+   *     for requesting media data.
+   * @param extractorsFactory An {@link ExtractorsFactory} used to extract progressive media from
+   *     its container.
+   * @param subtitleParserFactory A {@link SubtitleParser.Factory} to create {@link SubtitleParser}
+   *     instances used to parse subtitles.
+   */
+  @UnstableApi
+  public DefaultMediaSourceFactory(
+      DataSource.Factory dataSourceFactory,
+      ExtractorsFactory extractorsFactory,
+      SubtitleParser.Factory subtitleParserFactory) {
     this.dataSourceFactory = dataSourceFactory;
-    this.subtitleParserFactory = new DefaultSubtitleParserFactory();
+    this.subtitleParserFactory = subtitleParserFactory;
     delegateFactoryLoader = new DelegateFactoryLoader(extractorsFactory, subtitleParserFactory);
     delegateFactoryLoader.setDataSourceFactory(dataSourceFactory);
     liveTargetOffsetMs = C.TIME_UNSET;
@@ -456,6 +479,21 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
     return this;
   }
 
+  /**
+   * Sets whether to load only the tracks selected by the track selection policy.
+   *
+   * @param loadOnlySelectedTracks Whether to load only the tracks selected by the track selection
+   *     policy, instead of loading all tracks.
+   * @return This factory, for convenience.
+   */
+  @CanIgnoreReturnValue
+  @UnstableApi
+  public DefaultMediaSourceFactory setLoadOnlySelectedTracks(boolean loadOnlySelectedTracks) {
+    this.loadOnlySelectedTracks = loadOnlySelectedTracks;
+    delegateFactoryLoader.setLoadOnlySelectedTracks(loadOnlySelectedTracks);
+    return this;
+  }
+
   @UnstableApi
   @CanIgnoreReturnValue
   @Override
@@ -561,7 +599,8 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
                               .setCueReplacementBehavior(
                                   subtitleParserFactory.getCueReplacementBehavior(format))
                               .build()
-                          : format);
+                          : format)
+                  .setLoadOnlySelectedTracks(loadOnlySelectedTracks);
           if (loadErrorHandlingPolicy != null) {
             progressiveMediaSourceFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy);
           }
@@ -634,7 +673,8 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
         /* adMediaSourceFactory= */ this,
         adsLoader,
         adViewProvider,
-        /* useLazyContentSourcePreparation= */ true);
+        /* useLazyContentSourcePreparation= */ true,
+        /* useAdMediaSourceClipping= */ false);
   }
 
   /** Loads media source factories lazily. */
@@ -647,6 +687,7 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
     private boolean parseSubtitlesDuringExtraction;
     private SubtitleParser.Factory subtitleParserFactory;
     private @C.VideoCodecFlags int codecsToParseWithinGopSampleDependencies;
+    private boolean loadOnlySelectedTracks;
     @Nullable private CmcdConfiguration.Factory cmcdConfigurationFactory;
     @Nullable private DrmSessionManagerProvider drmSessionManagerProvider;
     @Nullable private LoadErrorHandlingPolicy loadErrorHandlingPolicy;
@@ -659,6 +700,7 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
       mediaSourceFactorySuppliers = new HashMap<>();
       mediaSourceFactories = new HashMap<>();
       parseSubtitlesDuringExtraction = true;
+      codecsToParseWithinGopSampleDependencies = C.VIDEO_CODEC_FLAG_H264 | C.VIDEO_CODEC_FLAG_H265;
     }
 
     public @C.ContentType int[] getSupportedTypes() {
@@ -757,6 +799,10 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
       }
     }
 
+    private void setLoadOnlySelectedTracks(boolean loadOnlySelectedTracks) {
+      this.loadOnlySelectedTracks = loadOnlySelectedTracks;
+    }
+
     private void setHeifExtractorFlags(@HeifExtractor.Flags int flags) {
       if (this.extractorsFactory instanceof DefaultExtractorsFactory) {
         ((DefaultExtractorsFactory) this.extractorsFactory).setHeifExtractorFlags(flags);
@@ -828,7 +874,9 @@ public final class DefaultMediaSourceFactory implements MediaSourceFactory {
           break;
         case C.CONTENT_TYPE_OTHER:
           mediaSourceFactorySupplier =
-              () -> new ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory);
+              () ->
+                  new ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+                      .setLoadOnlySelectedTracks(loadOnlySelectedTracks);
           break;
         default:
           throw new IllegalArgumentException("Unrecognized contentType: " + contentType);

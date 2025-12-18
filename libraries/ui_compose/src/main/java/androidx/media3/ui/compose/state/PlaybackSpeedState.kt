@@ -24,9 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.media3.common.Player
-import androidx.media3.common.listenTo
 import androidx.media3.common.util.UnstableApi
-import com.google.common.base.Preconditions.checkState
 
 /**
  * Remember the value of [PlaybackSpeedState] created based on the passed [Player] and launch a
@@ -54,11 +52,20 @@ fun rememberPlaybackSpeedState(player: Player): PlaybackSpeedState {
  */
 @UnstableApi
 class PlaybackSpeedState(private val player: Player) {
-  var isEnabled by mutableStateOf(arePlaybackParametersEnabled(player))
+  var isEnabled by mutableStateOf(false)
     private set
 
-  var playbackSpeed by mutableFloatStateOf(player.playbackParameters.speed)
+  var playbackSpeed by mutableFloatStateOf(1f)
     private set
+
+  private val playerStateObserver =
+    player.observeState(
+      Player.EVENT_PLAYBACK_PARAMETERS_CHANGED,
+      Player.EVENT_AVAILABLE_COMMANDS_CHANGED,
+    ) {
+      isEnabled = player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)
+      playbackSpeed = player.playbackParameters.speed
+    }
 
   /**
    * Updates the playback speed of the [Player] backing this state.
@@ -69,11 +76,10 @@ class PlaybackSpeedState(private val player: Player) {
    * @see [Player.COMMAND_SET_SPEED_AND_PITCH]
    */
   fun updatePlaybackSpeed(speed: Float) {
-    checkState(
-      arePlaybackParametersEnabled(player),
-      "COMMAND_SET_SPEED_AND_PITCH is not available.",
-    )
-    player.playbackParameters = player.playbackParameters.withSpeed(speed)
+    check(isEnabled)
+    if (player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+      player.playbackParameters = player.playbackParameters.withSpeed(speed)
+    }
   }
 
   /**
@@ -82,18 +88,5 @@ class PlaybackSpeedState(private val player: Player) {
    * * [Player.EVENT_AVAILABLE_COMMANDS_CHANGED] in order to determine whether the UI element
    *   responsible for setting the playback speed should be enabled, i.e. respond to user input.
    */
-  suspend fun observe(): Nothing {
-    playbackSpeed = player.playbackParameters.speed
-    isEnabled = arePlaybackParametersEnabled(player)
-    player.listenTo(
-      Player.EVENT_PLAYBACK_PARAMETERS_CHANGED,
-      Player.EVENT_AVAILABLE_COMMANDS_CHANGED,
-    ) {
-      playbackSpeed = playbackParameters.speed
-      isEnabled = arePlaybackParametersEnabled(this)
-    }
-  }
-
-  private fun arePlaybackParametersEnabled(player: Player) =
-    player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)
+  suspend fun observe(): Nothing = playerStateObserver.observe()
 }

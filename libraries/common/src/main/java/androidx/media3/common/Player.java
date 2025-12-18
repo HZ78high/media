@@ -15,6 +15,8 @@
  */
 package androidx.media3.common;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.Math.max;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.LOCAL_VARIABLE;
 import static java.lang.annotation.ElementType.METHOD;
@@ -60,7 +62,17 @@ import java.util.Objects;
  *       same thread.
  *   <li>The available functionality can be limited. Player instances provide a set of {@link
  *       #getAvailableCommands() available commands} to signal feature support and users of the
- *       interface must only call methods if the corresponding {@link Command} is available.
+ *       interface must only call methods if the corresponding {@link Command} is available. An
+ *       implementation has some flexibility in how to handle a call to a method when the
+ *       corresponding command is not available. Options include (non-exhaustive):
+ *       <ul>
+ *         <li>Do nothing (for a void method), or return an 'unset' or 'default' value.
+ *         <li>Throw an exception.
+ *         <li>Perform the requested operation anyway.
+ *         <li>Perform some 'default' version of the requested operation (e.g. {@link #seekTo(long)}
+ *             may trigger {@link #seekToDefaultPosition()} if called when {@link
+ *             #COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM} is not available).
+ *       </ul>
  *   <li>Users can register {@link Player.Listener} callbacks that get informed about state changes.
  *   <li>Player instances need to update the visible state immediately after each method call, even
  *       if the actual changes are handled on background threads or even other devices. This
@@ -340,6 +352,8 @@ public interface Player {
         long contentPositionMs,
         int adGroupIndex,
         int adIndexInAdGroup) {
+      checkArgument(mediaItemIndex >= 0);
+      checkArgument(periodIndex >= 0);
       this.windowUid = windowUid;
       this.windowIndex = mediaItemIndex;
       this.mediaItemIndex = mediaItemIndex;
@@ -398,7 +412,7 @@ public interface Player {
 
     /**
      * Returns whether this position info and the other position info would result in the same
-     * {@link #toBundle() Bundle}.
+     * {@link #toBundle(int) Bundle}.
      */
     @UnstableApi
     public boolean equalsForBundling(PositionInfo other) {
@@ -453,28 +467,28 @@ public interface Player {
      * Returns a {@link Bundle} representing the information stored in this object.
      *
      * <p>It omits the {@link #windowUid} and {@link #periodUid} fields. The {@link #windowUid} and
-     * {@link #periodUid} of an instance restored by {@link #fromBundle(Bundle)} will always be
+     * {@link #periodUid} of an instance restored by {@link #fromBundle(Bundle, int)} will always be
      * {@code null}.
      *
-     * @param controllerInterfaceVersion The interface version of the media controller this Bundle
-     *     will be sent to.
+     * @param interfaceVersion The {@link MediaLibraryInfo#INTERFACE_VERSION} of the receiving
+     *     process.
      */
     @UnstableApi
-    public Bundle toBundle(int controllerInterfaceVersion) {
+    public Bundle toBundle(int interfaceVersion) {
       Bundle bundle = new Bundle();
-      if (controllerInterfaceVersion < 3 || mediaItemIndex != 0) {
+      if (interfaceVersion < 3 || mediaItemIndex != 0) {
         bundle.putInt(FIELD_MEDIA_ITEM_INDEX, mediaItemIndex);
       }
       if (mediaItem != null) {
-        bundle.putBundle(FIELD_MEDIA_ITEM, mediaItem.toBundle());
+        bundle.putBundle(FIELD_MEDIA_ITEM, mediaItem.toBundle(interfaceVersion));
       }
-      if (controllerInterfaceVersion < 3 || periodIndex != 0) {
+      if (interfaceVersion < 3 || periodIndex != 0) {
         bundle.putInt(FIELD_PERIOD_INDEX, periodIndex);
       }
-      if (controllerInterfaceVersion < 3 || positionMs != 0) {
+      if (interfaceVersion < 3 || positionMs != 0) {
         bundle.putLong(FIELD_POSITION_MS, positionMs);
       }
-      if (controllerInterfaceVersion < 3 || contentPositionMs != 0) {
+      if (interfaceVersion < 3 || contentPositionMs != 0) {
         bundle.putLong(FIELD_CONTENT_POSITION_MS, contentPositionMs);
       }
       if (adGroupIndex != C.INDEX_UNSET) {
@@ -495,14 +509,30 @@ public interface Player {
       return toBundle(Integer.MAX_VALUE);
     }
 
-    /** Restores a {@code PositionInfo} from a {@link Bundle}. */
+    /**
+     * @deprecated Use {@link #fromBundle(Bundle, int)} instead.
+     */
     @UnstableApi
+    @Deprecated
     public static PositionInfo fromBundle(Bundle bundle) {
-      int mediaItemIndex = bundle.getInt(FIELD_MEDIA_ITEM_INDEX, /* defaultValue= */ 0);
+      return fromBundle(bundle, MediaLibraryInfo.INTERFACE_VERSION);
+    }
+
+    /**
+     * Restores a {@code PositionInfo} from a {@link Bundle}.
+     *
+     * @param bundle The {@link Bundle}.
+     * @param interfaceVersion The {@link MediaLibraryInfo#INTERFACE_VERSION} of the sending
+     *     process.
+     */
+    @UnstableApi
+    public static PositionInfo fromBundle(Bundle bundle, int interfaceVersion) {
+      int mediaItemIndex = max(0, bundle.getInt(FIELD_MEDIA_ITEM_INDEX, /* defaultValue= */ 0));
       @Nullable Bundle mediaItemBundle = bundle.getBundle(FIELD_MEDIA_ITEM);
       @Nullable
-      MediaItem mediaItem = mediaItemBundle == null ? null : MediaItem.fromBundle(mediaItemBundle);
-      int periodIndex = bundle.getInt(FIELD_PERIOD_INDEX, /* defaultValue= */ 0);
+      MediaItem mediaItem =
+          mediaItemBundle == null ? null : MediaItem.fromBundle(mediaItemBundle, interfaceVersion);
+      int periodIndex = max(0, bundle.getInt(FIELD_PERIOD_INDEX, /* defaultValue= */ 0));
       long positionMs = bundle.getLong(FIELD_POSITION_MS, /* defaultValue= */ 0);
       long contentPositionMs = bundle.getLong(FIELD_CONTENT_POSITION_MS, /* defaultValue= */ 0);
       int adGroupIndex = bundle.getInt(FIELD_AD_GROUP_INDEX, /* defaultValue= */ C.INDEX_UNSET);

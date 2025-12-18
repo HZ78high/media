@@ -63,6 +63,7 @@ import androidx.media3.effect.GlEffect;
 import androidx.media3.effect.GlShaderProgram;
 import androidx.media3.effect.MatrixTransformation;
 import androidx.media3.effect.PassthroughShaderProgram;
+import androidx.media3.effect.R;
 import androidx.media3.effect.ScaleAndRotateTransformation;
 import androidx.media3.effect.SingleInputVideoGraph;
 import androidx.media3.exoplayer.DecoderCounters;
@@ -116,6 +117,7 @@ public final class FrameExtractorInternal {
     public final SeekParameters seekParameters;
     public final MediaCodecSelector mediaCodecSelector;
     @Nullable public final GlObjectsProvider glObjectsProvider;
+    @Nullable public final MediaSource.Factory mediaSourceFactory;
     public final boolean extractHdrFrames;
     public final long positionMs;
 
@@ -126,6 +128,7 @@ public final class FrameExtractorInternal {
         SeekParameters seekParameters,
         MediaCodecSelector mediaCodecSelector,
         @Nullable GlObjectsProvider glObjectsProvider,
+        @Nullable MediaSource.Factory mediaSourceFactory,
         boolean extractHdrFrames,
         long positionMs) {
       this.context = context;
@@ -134,6 +137,7 @@ public final class FrameExtractorInternal {
       this.seekParameters = seekParameters;
       this.mediaCodecSelector = mediaCodecSelector;
       this.glObjectsProvider = glObjectsProvider;
+      this.mediaSourceFactory = mediaSourceFactory;
       this.extractHdrFrames = extractHdrFrames;
       this.positionMs = positionMs;
     }
@@ -150,6 +154,7 @@ public final class FrameExtractorInternal {
           this.seekParameters,
           this.mediaCodecSelector,
           this.glObjectsProvider,
+          this.mediaSourceFactory,
           this.extractHdrFrames,
           positionMs);
     }
@@ -180,6 +185,7 @@ public final class FrameExtractorInternal {
   private boolean currentExtractHdrFrames;
 
   @Nullable private GlObjectsProvider currentGlObjectsProvider;
+  @Nullable private MediaSource.Factory currentMediaSourceFactory;
   private long thumbnailPresentationTimeMs;
 
   private FrameExtractorInternal() {
@@ -219,6 +225,7 @@ public final class FrameExtractorInternal {
                 currentMediaCodecSelector = MediaCodecSelector.DEFAULT;
                 currentExtractHdrFrames = false;
                 currentGlObjectsProvider = null;
+                currentMediaSourceFactory = null;
                 lastSeekDedupeFrame = null;
                 thumbnailPresentationTimeMs = C.TIME_UNSET;
               }
@@ -233,14 +240,20 @@ public final class FrameExtractorInternal {
         () -> {
           boolean needsNewPlayer =
               player == null
+                  // TODO: b/457376636 - reuse player when switching between HDR and SDR, after the
+                  // video processing pipeline is updated.
+                  || currentExtractHdrFrames
+                  || request.extractHdrFrames
+                  // TODO: b/457376636 - reuse the player on error when the video frame processor
+                  // can recover from errors.
+                  || player.getPlayerError() != null
                   || request.mediaCodecSelector != currentMediaCodecSelector
-                  || request.extractHdrFrames != currentExtractHdrFrames
-                  || request.glObjectsProvider != currentGlObjectsProvider;
+                  || request.glObjectsProvider != currentGlObjectsProvider
+                  || request.mediaSourceFactory != currentMediaSourceFactory;
 
           boolean needsPrepare =
               needsNewPlayer
-                  || !request.mediaItem.equals(checkNotNull(player).getCurrentMediaItem())
-                  || checkNotNull(player).getPlayerError() != null;
+                  || !request.mediaItem.equals(checkNotNull(player).getCurrentMediaItem());
 
           boolean isThumbnailRequest = request.positionMs == C.TIME_UNSET;
 
@@ -314,6 +327,7 @@ public final class FrameExtractorInternal {
           ExoPlayer player = checkNotNull(this.player);
           if (needsPrepare) {
             lastSeekDedupeFrame = null;
+            extractedFrameNeedsRendering.set(true);
             thumbnailPresentationTimeMs = C.TIME_UNSET;
             player.setVideoEffects(videoEffects);
             player.setMediaItem(request.mediaItem);
@@ -338,11 +352,15 @@ public final class FrameExtractorInternal {
       currentMediaCodecSelector = request.mediaCodecSelector;
       currentExtractHdrFrames = request.extractHdrFrames;
       currentGlObjectsProvider = request.glObjectsProvider;
+      currentMediaSourceFactory = request.mediaSourceFactory;
 
-      MediaSource.Factory mediaSourceFactory =
-          new DefaultMediaSourceFactory(request.context, new DefaultExtractorsFactory())
-              .experimentalSetCodecsToParseWithinGopSampleDependencies(
-                  C.VIDEO_CODEC_FLAG_H264 | C.VIDEO_CODEC_FLAG_H265);
+      MediaSource.Factory mediaSourceFactoryToUse;
+      if (request.mediaSourceFactory != null) {
+        mediaSourceFactoryToUse = request.mediaSourceFactory;
+      } else {
+        mediaSourceFactoryToUse =
+            new DefaultMediaSourceFactory(request.context, new DefaultExtractorsFactory());
+      }
 
       player =
           new ExoPlayer.Builder(
@@ -363,7 +381,7 @@ public final class FrameExtractorInternal {
                             extractedFrameNeedsRendering,
                             this)
                       },
-                  mediaSourceFactory)
+                  mediaSourceFactoryToUse)
               .setLooper(playerHandler.getLooper())
               .experimentalSetDynamicSchedulingEnabled(true)
               .build();
@@ -462,10 +480,12 @@ public final class FrameExtractorInternal {
 
       if (useHdr) {
         checkState(SDK_INT >= 34);
-        String vertexShaderFilePath = "shaders/vertex_shader_transformation_es3.glsl";
-        String fragmentShaderFilePath = "shaders/fragment_shader_oetf_es3.glsl";
         try {
-          glProgram = new GlProgram(context, vertexShaderFilePath, fragmentShaderFilePath);
+          glProgram =
+              new GlProgram(
+                  context,
+                  /* vertexShaderResId= */ R.raw.vertex_shader_transformation_es3,
+                  /* fragmentShaderResId= */ R.raw.fragment_shader_oetf_es3);
         } catch (IOException | GlUtil.GlException e) {
           throw new VideoFrameProcessingException(e);
         }

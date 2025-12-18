@@ -39,6 +39,7 @@ import androidx.annotation.IntRange;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
+import androidx.core.util.Preconditions;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.BasePlayer;
 import androidx.media3.common.C;
@@ -71,7 +72,6 @@ import com.google.android.gms.cast.MediaStatus;
 import com.google.android.gms.cast.MediaTrack;
 import com.google.android.gms.cast.framework.CastContext;
 import com.google.android.gms.cast.framework.CastSession;
-import com.google.android.gms.cast.framework.SessionManager;
 import com.google.android.gms.cast.framework.SessionManagerListener;
 import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 import com.google.android.gms.cast.framework.media.RemoteMediaClient.MediaChannelResult;
@@ -240,6 +240,8 @@ public final class RemoteCastPlayer extends BasePlayer {
     MediaLibraryInfo.registerModule("media3.cast");
   }
 
+  // Deprecated commands are still available, e.g. COMMAND_ADJUST_DEVICE_VOLUME
+  @SuppressWarnings("deprecation")
   @VisibleForTesting
   /* package */ static final Commands PERMANENT_AVAILABLE_COMMANDS =
       new Commands.Builder()
@@ -274,7 +276,7 @@ public final class RemoteCastPlayer extends BasePlayer {
   private static final long PROGRESS_REPORT_PERIOD_MS = 1000;
   private static final long[] EMPTY_TRACK_ID_ARRAY = new long[0];
 
-  private final CastContext castContext;
+  private final CastContextWrapper castContextWrapper;
   private final MediaItemConverter mediaItemConverter;
   private final long seekBackIncrementMs;
   private final long seekForwardIncrementMs;
@@ -305,7 +307,7 @@ public final class RemoteCastPlayer extends BasePlayer {
   @Nullable private CastSession castSession;
   @Nullable private RemoteMediaClient remoteMediaClient;
   private CastTimeline currentTimeline;
-  private Tracks currentTracks;
+  private final StateHolder<Tracks> currentTracks;
   private Commands availableCommands;
   private @Player.State int playbackState;
   private int currentWindowIndex;
@@ -321,7 +323,7 @@ public final class RemoteCastPlayer extends BasePlayer {
   private RemoteCastPlayer(Builder builder) {
     this(
         builder.context,
-        CastContext.getSharedInstance(builder.context),
+        CastContextWrapper.getSingletonInstance(),
         builder.mediaItemConverter,
         builder.seekBackIncrementMs,
         builder.seekForwardIncrementMs,
@@ -336,14 +338,23 @@ public final class RemoteCastPlayer extends BasePlayer {
    */
   /* package */ RemoteCastPlayer(
       @Nullable Context context,
-      CastContext castContext,
+      CastContextWrapper castContextWrapper,
       MediaItemConverter mediaItemConverter,
       @IntRange(from = 1) long seekBackIncrementMs,
       @IntRange(from = 1) long seekForwardIncrementMs,
       @IntRange(from = 0) long maxSeekToPreviousPositionMs) {
     checkArgument(seekBackIncrementMs > 0 && seekForwardIncrementMs > 0);
     checkArgument(maxSeekToPreviousPositionMs >= 0L);
-    this.castContext = castContext;
+    Log.i(
+        TAG,
+        "Init "
+            + Integer.toHexString(System.identityHashCode(this))
+            + " ["
+            + MediaLibraryInfo.VERSION_SLASHY
+            + "] ["
+            + Util.DEVICE_DEBUG_INFO
+            + "]");
+    this.castContextWrapper = castContextWrapper;
     this.mediaItemConverter = mediaItemConverter;
     this.seekBackIncrementMs = seekBackIncrementMs;
     this.seekForwardIncrementMs = seekForwardIncrementMs;
@@ -367,14 +378,18 @@ public final class RemoteCastPlayer extends BasePlayer {
     currentTimeline = CastTimeline.EMPTY_CAST_TIMELINE;
     mediaMetadata = MediaMetadata.EMPTY;
     playlistMetadata = MediaMetadata.EMPTY;
-    currentTracks = Tracks.EMPTY;
+    currentTracks = new StateHolder<>(Tracks.EMPTY);
     availableCommands = new Commands.Builder().addAll(PERMANENT_AVAILABLE_COMMANDS).build();
     pendingSeekWindowIndex = C.INDEX_UNSET;
     pendingSeekPositionMs = C.TIME_UNSET;
 
-    SessionManager sessionManager = castContext.getSessionManager();
-    sessionManager.addSessionManagerListener(statusListener, CastSession.class);
-    setCastSession(sessionManager.getCurrentCastSession());
+    if (castContextWrapper.needsInitialization()) {
+      Preconditions.checkNotNull(
+          context, "A context is mandatory if the CastContextWrapper is not initialized.");
+      castContextWrapper.asyncInit(context);
+    }
+    castContextWrapper.addSessionManagerListener(statusListener);
+    setCastSession(castContextWrapper.getCurrentCastSession());
     updateInternalStateAndNotifyIfChanged();
     if (SDK_INT >= 30 && context != null) {
       api30Impl = new Api30Impl(context);
@@ -676,13 +691,23 @@ public final class RemoteCastPlayer extends BasePlayer {
 
   @Override
   public void release() {
+    Log.i(
+        TAG,
+        "Release "
+            + Integer.toHexString(System.identityHashCode(this))
+            + " ["
+            + MediaLibraryInfo.VERSION_SLASHY
+            + "] ["
+            + Util.DEVICE_DEBUG_INFO
+            + "] ["
+            + MediaLibraryInfo.registeredModules()
+            + "]");
     // The SDK_INT check is not necessary, but it prevents a lint error for the release call.
     if (SDK_INT >= 30 && api30Impl != null) {
       api30Impl.release();
     }
-    SessionManager sessionManager = castContext.getSessionManager();
-    sessionManager.removeSessionManagerListener(statusListener, CastSession.class);
-    sessionManager.endCurrentSession(false);
+    castContextWrapper.removeSessionManagerListener(statusListener);
+    castContextWrapper.endCurrentSession(false);
   }
 
   @Override
@@ -754,7 +779,7 @@ public final class RemoteCastPlayer extends BasePlayer {
 
   @Override
   public Tracks getCurrentTracks() {
-    return currentTracks;
+    return currentTracks.value;
   }
 
   @Override
@@ -1141,10 +1166,7 @@ public final class RemoteCastPlayer extends BasePlayer {
               listener.onMediaItemTransition(
                   getCurrentMediaItem(), MEDIA_ITEM_TRANSITION_REASON_AUTO));
     }
-    if (updateTracksAndSelectionsAndNotifyIfChanged()) {
-      listeners.queueEvent(
-          Player.EVENT_TRACKS_CHANGED, listener -> listener.onTracksChanged(currentTracks));
-    }
+    updateTracksAndNotifyIfChanged();
     if (!oldMediaMetadata.equals(mediaMetadata)) {
       listeners.queueEvent(
           Player.EVENT_MEDIA_METADATA_CHANGED,
@@ -1319,11 +1341,11 @@ public final class RemoteCastPlayer extends BasePlayer {
     return timelineChanged;
   }
 
-  /** Updates the internal tracks and selection and returns whether they have changed. */
-  private boolean updateTracksAndSelectionsAndNotifyIfChanged() {
+  /** Updates the internal tracks and queues a listener event if tracks have changed. */
+  private void updateTracksAndNotifyIfChanged() {
     if (remoteMediaClient == null) {
       // There is no session. We leave the state of the player as it is now.
-      return false;
+      return;
     }
 
     @Nullable MediaStatus mediaStatus = getMediaStatus();
@@ -1331,9 +1353,8 @@ public final class RemoteCastPlayer extends BasePlayer {
     @Nullable
     List<MediaTrack> castMediaTracks = mediaInfo != null ? mediaInfo.getMediaTracks() : null;
     if (castMediaTracks == null || castMediaTracks.isEmpty()) {
-      boolean hasChanged = !Tracks.EMPTY.equals(currentTracks);
-      currentTracks = Tracks.EMPTY;
-      return hasChanged;
+      setTracksAndNotifyIfChanged(Tracks.EMPTY);
+      return;
     }
     @Nullable long[] activeTrackIds = mediaStatus.getActiveTrackIds();
     if (activeTrackIds == null) {
@@ -1351,11 +1372,7 @@ public final class RemoteCastPlayer extends BasePlayer {
           new Tracks.Group(trackGroup, /* adaptiveSupported= */ false, trackSupport, trackSelected);
     }
     Tracks newTracks = new Tracks(ImmutableList.copyOf(trackGroups));
-    if (!newTracks.equals(currentTracks)) {
-      currentTracks = newTracks;
-      return true;
-    }
-    return false;
+    setTracksAndNotifyIfChanged(newTracks);
   }
 
   private void updateAvailableCommandsAndNotifyIfChanged() {
@@ -1554,6 +1571,15 @@ public final class RemoteCastPlayer extends BasePlayer {
         listeners.queueEvent(
             Player.EVENT_IS_PLAYING_CHANGED, listener -> listener.onIsPlayingChanged(isPlaying));
       }
+    }
+  }
+
+  private void setTracksAndNotifyIfChanged(Tracks tracks) {
+    if (!tracks.equals(currentTracks.value)) {
+      currentTracks.value = tracks;
+      listeners.queueEvent(
+          Player.EVENT_TRACKS_CHANGED, listener -> listener.onTracksChanged(tracks));
+      updateAvailableCommandsAndNotifyIfChanged();
     }
   }
 

@@ -43,7 +43,6 @@ import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.common.util.Log;
 import androidx.media3.common.util.TraceUtil;
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.common.util.Util;
 import androidx.media3.decoder.CryptoConfig;
 import androidx.media3.decoder.Decoder;
 import androidx.media3.decoder.DecoderException;
@@ -94,6 +93,8 @@ import java.lang.annotation.RetentionPolicy;
  *   <li>Message with type {@link #MSG_SET_AUDIO_SESSION_ID} to set the audio session ID. The
  *       message payload should be a session ID {@link Integer} that will be attached to the
  *       underlying audio track.
+ *   <li>Message with type {@link #MSG_SET_AUDIO_OUTPUT_PROVIDER} to set the audio output provider.
+ *       The message payload must be an {@link AudioOutputProvider} instance.
  * </ul>
  */
 @UnstableApi
@@ -170,6 +171,7 @@ public abstract class DecoderAudioRenderer<
   private final long[] pendingOutputStreamOffsetsUs;
   private int pendingOutputStreamOffsetCount;
   private boolean hasPendingReportedSkippedSilence;
+  private boolean hasReportedAudioPositionAdvancing;
   private boolean isStarted;
   private long largestQueuedPresentationTimeUs;
   private long lastBufferInStreamPresentationTimeUs;
@@ -258,9 +260,11 @@ public abstract class DecoderAudioRenderer<
           : DEFAULT_DURATION_TO_PROGRESS_US;
     }
     long audioTrackBufferDurationUs = audioSink.getAudioTrackBufferSizeUs();
-    if (!audioSinkBufferFull || audioTrackBufferDurationUs == C.TIME_UNSET) {
-      // If the AudioSink buffer is not yet full or getting the audio track buffer size is
-      // unsupported, continue calling with default duration to progress.
+    if (!hasReportedAudioPositionAdvancing
+        || !audioSinkBufferFull
+        || audioTrackBufferDurationUs == C.TIME_UNSET) {
+      // If audio has not yet advanced, the AudioSink buffer is not yet full, or getting the audio
+      // track buffer size is unsupported, continue calling with default duration to progress.
       return DEFAULT_DURATION_TO_PROGRESS_US;
     }
     // Compare written, yet-to-play content duration against the audio track buffer size.
@@ -271,8 +275,6 @@ public abstract class DecoderAudioRenderer<
             (bufferedDurationUs
                 / (getPlaybackParameters() != null ? getPlaybackParameters().speed : 1.0f)
                 / 2);
-    // Account for the elapsed time since the start of this iteration of the rendering loop.
-    bufferedDurationUs -= Util.msToUs(getClock().elapsedRealtime()) - elapsedRealtimeUs;
     return max(DEFAULT_DURATION_TO_PROGRESS_US, bufferedDurationUs);
   }
 
@@ -680,6 +682,7 @@ public abstract class DecoderAudioRenderer<
     currentPositionUs = positionUs;
     nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
     hasPendingReportedSkippedSilence = false;
+    hasReportedAudioPositionAdvancing = false;
     allowPositionDiscontinuity = true;
     inputStreamEnded = false;
     outputStreamEnded = false;
@@ -699,6 +702,7 @@ public abstract class DecoderAudioRenderer<
     updateCurrentPosition();
     audioSink.pause();
     isStarted = false;
+    hasReportedAudioPositionAdvancing = false;
   }
 
   @Override
@@ -707,6 +711,7 @@ public abstract class DecoderAudioRenderer<
     audioTrackNeedsConfigure = true;
     setOutputStreamOffsetUs(C.TIME_UNSET);
     hasPendingReportedSkippedSilence = false;
+    hasReportedAudioPositionAdvancing = false;
     nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
     try {
       setSourceDrmSession(null);
@@ -767,6 +772,9 @@ public abstract class DecoderAudioRenderer<
         break;
       case MSG_SET_VIRTUAL_DEVICE_ID:
         audioSink.setVirtualDeviceId((Integer) checkNotNull(message));
+        break;
+      case MSG_SET_AUDIO_OUTPUT_PROVIDER:
+        audioSink.setAudioOutputProvider((AudioOutputProvider) checkNotNull(message));
         break;
       case MSG_SET_CAMERA_MOTION_LISTENER:
       case MSG_SET_CHANGE_FRAME_RATE_STRATEGY:
@@ -922,6 +930,7 @@ public abstract class DecoderAudioRenderer<
 
     @Override
     public void onPositionAdvancing(long playoutStartSystemTimeMs) {
+      hasReportedAudioPositionAdvancing = true;
       eventDispatcher.positionAdvancing(playoutStartSystemTimeMs);
     }
 

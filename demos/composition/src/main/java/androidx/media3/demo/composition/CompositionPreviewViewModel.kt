@@ -19,6 +19,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
+import android.view.SurfaceHolder
 import androidx.annotation.OptIn
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +31,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.GlObjectsProvider
 import androidx.media3.common.MediaItem
@@ -53,8 +55,8 @@ import androidx.media3.demo.composition.data.OverlayAsset
 import androidx.media3.demo.composition.data.OverlayState
 import androidx.media3.demo.composition.data.PlacedOverlay
 import androidx.media3.demo.composition.data.PlacementState
-import androidx.media3.demo.composition.effect.DemoRenderingFrameConsumer
 import androidx.media3.demo.composition.effect.LottieEffectFactory
+import androidx.media3.demo.composition.effect.ProcessAndRenderToSurfaceConsumer
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.DebugTraceUtil
 import androidx.media3.effect.LanczosResample
@@ -62,6 +64,7 @@ import androidx.media3.effect.MultipleInputVideoGraph
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.RgbFilter
+import androidx.media3.effect.SingleContextGlObjectsProvider
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.CompositionPlayer
@@ -100,24 +103,25 @@ class CompositionPreviewViewModel(application: Application) : AndroidViewModel(a
   val uiState: StateFlow<CompositionPreviewState> = _uiState.asStateFlow()
 
   var compositionPlayer by mutableStateOf(createCompositionPlayer())
-  var refreshPlayerViewKey by mutableStateOf(0)
   val EXPORT_ERROR_MESSAGE = application.resources.getString(R.string.export_error)
   val EXPORT_STARTED_MESSAGE = application.resources.getString(R.string.export_started)
   internal var frameConsumerEnabled: Boolean = false
-  internal val outputRenderer: DemoRenderingFrameConsumer by lazy {
-    DemoRenderingFrameConsumer(glExecutorService) { error ->
-      _uiState.update { currentState ->
-        currentState.copy(snackbarMessage = "Preview error: $error")
-      }
-      Log.e(TAG, "Preview error", error)
-    }
+  internal var holder: SurfaceHolder? = null
+  internal val packetConsumerFactory: ProcessAndRenderToSurfaceConsumer.Factory by lazy {
+    ProcessAndRenderToSurfaceConsumer.Factory(
+      getApplication(),
+      glExecutorService,
+      glObjectsProvider,
+      errorListener = { e ->
+        Log.e(TAG, "FrameConsumer error", e)
+        _uiState.update { it.copy(snackbarMessage = "Preview error: $e") }
+      },
+    )
   }
   private val glExecutorService: ExecutorService by lazy {
     Util.newSingleThreadExecutor("CompositionDemo::GlThread")
   }
-  private val glObjectsProvider: GlObjectsProvider by lazy {
-    DemoRenderingFrameConsumer.SingleContextGlObjectsProvider()
-  }
+  private val glObjectsProvider: GlObjectsProvider by lazy { SingleContextGlObjectsProvider() }
   private var transformer: Transformer? = null
   private var outputFile: File? = null
   private var exportStopwatch: Stopwatch =
@@ -630,7 +634,10 @@ class CompositionPreviewViewModel(application: Application) : AndroidViewModel(a
         else -> 1 // Sequence
       }
     // TODO(b/417365294): Improve how sequences are built
-    val videoSequenceBuilders = MutableList(numSequences) { EditedMediaItemSequence.Builder() }
+    val videoSequenceBuilders =
+      MutableList(numSequences) {
+        EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_VIDEO))
+      }
     val videoSequences = mutableListOf<EditedMediaItemSequence>()
     for (sequenceIndex in 0 until numSequences) {
       var hasItem = false
@@ -769,10 +776,10 @@ class CompositionPreviewViewModel(application: Application) : AndroidViewModel(a
     val playerBuilder = CompositionPlayer.Builder(getApplication())
     frameConsumerEnabled = uiState.value.outputSettingsState.frameConsumerEnabled
     if (uiState.value.outputSettingsState.frameConsumerEnabled) {
+      packetConsumerFactory.setOutput(holder)
+      playerBuilder.setPacketConsumerFactory(packetConsumerFactory)
       playerBuilder.setGlThreadExecutorService(glExecutorService)
       playerBuilder.setGlObjectsProvider(glObjectsProvider)
-      uiState.value.outputSurface?.let { outputRenderer.setOutputSurface(it) }
-      playerBuilder.experimentalSetFrameConsumer(outputRenderer::queue)
     } else if (uiState.value.compositionLayout != COMPOSITION_LAYOUT[0]) {
       playerBuilder.setVideoGraphFactory(MultipleInputVideoGraph.Factory())
     }
@@ -851,7 +858,10 @@ class CompositionPreviewViewModel(application: Application) : AndroidViewModel(a
     fun getAudioBackgroundSequence(): EditedMediaItemSequence {
       val audioMediaItem: MediaItem = MediaItem.Builder().setUri(AUDIO_URI).build()
       val audioItem = EditedMediaItem.Builder(audioMediaItem).setDurationUs(59_000_000).build()
-      return EditedMediaItemSequence.Builder(audioItem).setIsLooping(true).build()
+      return EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
+        .addItem(audioItem)
+        .setIsLooping(true)
+        .build()
     }
   }
 }

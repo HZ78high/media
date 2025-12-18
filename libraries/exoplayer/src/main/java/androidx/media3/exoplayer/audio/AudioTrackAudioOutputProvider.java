@@ -59,7 +59,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
 /** A default implementation of {@link AudioOutputProvider}. */
-@UnstableApi
 public final class AudioTrackAudioOutputProvider implements AudioOutputProvider {
 
   private static final String TAG = "ATAudioOutputProvider";
@@ -71,6 +70,8 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
    * <p>The flag must be set before creating a player. Should be set to {@code true} for testing and
    * debugging purposes only.
    */
+  @SuppressWarnings("NonFinalStaticField") // Test-only access
+  @UnstableApi
   public static boolean failOnSpuriousAudioTimestamp = false;
 
   /** A builder to create {@link AudioTrackAudioOutputProvider} instances. */
@@ -82,7 +83,10 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
     private @MonotonicNonNull AudioOffloadSupportProvider audioOffloadSupportProvider;
     private AudioTrackBufferSizeProvider bufferSizeProvider;
     @Nullable private AudioCapabilities audioCapabilities;
-    @Nullable private AudioTrackProvider audioTrackProvider;
+
+    @SuppressWarnings("deprecation") // Supporting deprecated AudioTrack customization path.
+    @Nullable
+    private AudioTrackProvider audioTrackProvider;
 
     /**
      * Creates a new builder.
@@ -123,6 +127,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
      * @param audioOffloadSupportProvider The {@link AudioOffloadSupportProvider} to use.
      * @return This builder.
      */
+    @UnstableApi
     @CanIgnoreReturnValue
     public Builder setAudioOffloadSupportProvider(
         AudioOffloadSupportProvider audioOffloadSupportProvider) {
@@ -139,6 +144,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
      * @param bufferSizeProvider The {@link AudioTrackBufferSizeProvider} to use.
      * @return This builder.
      */
+    @UnstableApi
     @CanIgnoreReturnValue
     public Builder setAudioTrackBufferSizeProvider(
         AudioTrackBufferSizeProvider bufferSizeProvider) {
@@ -147,6 +153,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
     }
 
     /** Sets the static {@link AudioCapabilities} for backwards compatibility. */
+    @UnstableApi
     @CanIgnoreReturnValue
     /* package */ Builder setAudioCapabilities(@Nullable AudioCapabilities audioCapabilities) {
       if (context == null) {
@@ -156,14 +163,16 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
     }
 
     /** Sets the {@link AudioTrackProvider} for backwards compatibility. */
+    @UnstableApi
     @CanIgnoreReturnValue
+    @SuppressWarnings("deprecation") // Supporting deprecated AudioTrack customization path.
     /* package */ Builder setAudioTrackProvider(@Nullable AudioTrackProvider audioTrackProvider) {
       this.audioTrackProvider = audioTrackProvider;
       return this;
     }
 
     /** Builds the {@link AudioTrackAudioOutputProvider}. */
-    public AudioOutputProvider build() {
+    public AudioTrackAudioOutputProvider build() {
       if (audioOffloadSupportProvider == null) {
         audioOffloadSupportProvider = new DefaultAudioOffloadSupportProvider(context);
       }
@@ -173,7 +182,11 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
   }
 
   @Nullable private final Context context;
-  @Nullable private final AudioTrackProvider audioTrackProvider;
+
+  @SuppressWarnings("deprecation") // Supporting deprecated AudioTrack customization path.
+  @Nullable
+  private final AudioTrackProvider audioTrackProvider;
+
   @Nullable private final BiConsumer<AudioTrack.Builder, OutputConfig> builderModifier;
   private final AudioTrackBufferSizeProvider audioTrackBufferSizeProvider;
   private final AudioOffloadSupportProvider audioOffloadSupportProvider;
@@ -264,15 +277,6 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
       }
     }
 
-    if (outputEncoding == C.ENCODING_INVALID) {
-      throw new ConfigurationException(
-          "Invalid output encoding (mode=" + outputMode + ") for: " + format);
-    }
-    if (outputChannelConfig == AudioFormat.CHANNEL_INVALID) {
-      throw new ConfigurationException(
-          "Invalid output channel config (mode=" + outputMode + ") for: " + format);
-    }
-
     // Replace unknown bitrate by maximum allowed bitrate for DTS Express to avoid allocating an
     // AudioTrack buffer for the much larger maximum bitrate of the underlying DTS-HD encoding.
     int bitrate = format.bitrate;
@@ -295,7 +299,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
 
     return new OutputConfig.Builder()
         .setSampleRate(outputSampleRate)
-        .setChannelConfig(outputChannelConfig)
+        .setChannelMask(outputChannelConfig)
         .setEncoding(outputEncoding)
         .setBufferSize(bufferSize)
         .setAudioSessionId(formatConfig.audioSessionId)
@@ -310,7 +314,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
 
   @SuppressWarnings("CatchingUnchecked") // Catching generic Exception from AudioTrack.release
   @Override
-  public AudioOutput getAudioOutput(OutputConfig config) throws InitializationException {
+  public AudioTrackAudioOutput getAudioOutput(OutputConfig config) throws InitializationException {
     AudioTrack audioTrack;
     try {
       @Nullable Context contextForAudioTrack = null;
@@ -333,7 +337,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
         AudioFormat format =
             new AudioFormat.Builder()
                 .setSampleRate(config.sampleRate)
-                .setChannelMask(config.channelConfig)
+                .setChannelMask(config.channelMask)
                 .setEncoding(config.encoding)
                 .build();
         android.media.AudioAttributes audioTrackAttributes =
@@ -366,7 +370,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
         // The track has already failed to initialize, so it wouldn't be that surprising if
         // release were to fail too. Swallow the exception.
       }
-      throw new InitializationException(/* cause= */ null);
+      throw new InitializationException();
     }
     return new AudioTrackAudioOutput(audioTrack, config, capabilityChangeListener, clock);
   }
@@ -375,7 +379,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
   public void addListener(Listener listener) {
     verifySinglePlaybackLooper();
     if (listeners == null) {
-      listeners = new ListenerSet<>(checkNotNull(Looper.myLooper()), clock);
+      listeners = new ListenerSet<>(Thread.currentThread());
       // TODO: b/450556896 - remove this line once threading in CompositionPlayer is fixed.
       listeners.setThrowsWhenUsingWrongThread(false);
     }
@@ -389,6 +393,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
     }
   }
 
+  @UnstableApi
   @Override
   public void setClock(Clock clock) {
     this.clock = clock;
@@ -510,7 +515,7 @@ public final class AudioTrackAudioOutputProvider implements AudioOutputProvider 
     return new AudioTrackConfig(
         config.encoding,
         config.sampleRate,
-        config.channelConfig,
+        config.channelMask,
         config.isTunneling,
         config.isOffload,
         config.bufferSize);

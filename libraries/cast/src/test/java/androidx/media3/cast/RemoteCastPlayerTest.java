@@ -64,7 +64,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
 
 import android.net.Uri;
 import androidx.media3.common.C;
@@ -98,7 +97,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -106,10 +107,13 @@ import org.mockito.Captor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 /** Tests for {@link RemoteCastPlayer}. */
 @RunWith(AndroidJUnit4.class)
 public class RemoteCastPlayerTest {
+  @Rule public final MockitoRule mockito = MockitoJUnit.rule();
 
   private RemoteCastPlayer remoteCastPlayer;
   private DefaultMediaItemConverter mediaItemConverter;
@@ -135,10 +139,8 @@ public class RemoteCastPlayerTest {
   @Captor private ArgumentCaptor<MediaQueueItem[]> queueItemsArgumentCaptor;
   @Captor private ArgumentCaptor<MediaItem> mediaItemCaptor;
 
-  @SuppressWarnings("deprecation")
   @Before
   public void setUp() {
-    initMocks(this);
     when(mockCastContext.getSessionManager()).thenReturn(mockSessionManager);
     when(mockSessionManager.getCurrentCastSession()).thenReturn(mockCastSession);
     when(mockCastSession.getRemoteMediaClient()).thenReturn(mockRemoteMediaClient);
@@ -155,7 +157,7 @@ public class RemoteCastPlayerTest {
     remoteCastPlayer =
         new RemoteCastPlayer(
             /* context= */ null,
-            mockCastContext,
+            CastContextWrapper.getSingletonInstance().initWithContext(mockCastContext),
             mediaItemConverter,
             C.DEFAULT_SEEK_BACK_INCREMENT_MS,
             C.DEFAULT_SEEK_FORWARD_INCREMENT_MS,
@@ -165,6 +167,12 @@ public class RemoteCastPlayerTest {
     castListener = castListenerArgumentCaptor.getValue();
     verify(mockRemoteMediaClient).registerCallback(callbackArgumentCaptor.capture());
     remoteMediaClientCallback = callbackArgumentCaptor.getValue();
+  }
+
+  @After
+  public void tearDown() {
+    remoteCastPlayer.release();
+    CastContextWrapper.reset();
   }
 
   @SuppressWarnings("deprecation")

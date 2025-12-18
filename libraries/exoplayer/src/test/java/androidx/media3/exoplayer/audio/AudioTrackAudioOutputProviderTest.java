@@ -52,7 +52,7 @@ import org.robolectric.shadows.ShadowAudioTrack;
 public class AudioTrackAudioOutputProviderTest {
 
   private Context context;
-  private AudioOutputProvider audioOutputProvider;
+  private AudioTrackAudioOutputProvider audioOutputProvider;
   private AudioManager audioManager;
 
   private static final AudioAttributes TEST_ATTRIBUTES =
@@ -172,7 +172,7 @@ public class AudioTrackAudioOutputProviderTest {
             new OutputConfig.Builder()
                 .setEncoding(C.ENCODING_PCM_16BIT)
                 .setSampleRate(44100)
-                .setChannelConfig(CHANNEL_OUT_STEREO)
+                .setChannelMask(CHANNEL_OUT_STEREO)
                 .setBufferSize(1024)
                 .build());
 

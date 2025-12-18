@@ -88,7 +88,6 @@ import androidx.compose.material3.adaptive.navigation.rememberSupportingPaneScaf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -267,11 +266,9 @@ class CompositionPreviewActivity : AppCompatActivity() {
             playerView.setTimeBarScrubbingEnabled(!isOverlayPlacementActive)
             playerView.setUseController(!isOverlayPlacementActive)
             // TODO: b/449957627 - Remove once internal pipeline is migrated to FrameConsumer.
+            viewModel.holder = (playerView.videoSurfaceView as SurfaceView).holder
             if (viewModel.frameConsumerEnabled) {
               playerView.setShutterBackgroundColor(Color.TRANSPARENT)
-              viewModel.outputRenderer.setOutputSurface(
-                (playerView.videoSurfaceView as SurfaceView).holder.surface
-              )
               // Workaround to ensure the Surface is recreated when switching from CPU to GPU
               // rendering.
               if (SDK_INT >= 34) {

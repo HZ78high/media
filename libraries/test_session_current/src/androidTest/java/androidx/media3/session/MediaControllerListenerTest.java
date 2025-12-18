@@ -16,8 +16,12 @@
 package androidx.media3.session;
 
 import static androidx.media3.common.Player.COMMAND_CHANGE_MEDIA_ITEMS;
+import static androidx.media3.common.Player.COMMAND_GET_AUDIO_ATTRIBUTES;
+import static androidx.media3.common.Player.COMMAND_GET_CURRENT_MEDIA_ITEM;
 import static androidx.media3.common.Player.COMMAND_GET_DEVICE_VOLUME;
+import static androidx.media3.common.Player.COMMAND_GET_METADATA;
 import static androidx.media3.common.Player.COMMAND_GET_TIMELINE;
+import static androidx.media3.common.Player.COMMAND_GET_TRACKS;
 import static androidx.media3.common.Player.COMMAND_PREPARE;
 import static androidx.media3.common.Player.COMMAND_RELEASE;
 import static androidx.media3.common.Player.COMMAND_SEEK_BACK;
@@ -249,7 +253,7 @@ public class MediaControllerListenerTest {
     MediaController controller = controllerTestRule.createController(token);
 
     assertThat(controller.getConnectedToken().getInterfaceVersion())
-        .isEqualTo(MediaSessionStub.VERSION_INT);
+        .isEqualTo(MediaLibraryInfo.INTERFACE_VERSION);
     assertThat(controller.getConnectedToken().getSessionVersion())
         .isEqualTo(MediaLibraryInfo.VERSION_INT);
   }
@@ -863,7 +867,15 @@ public class MediaControllerListenerTest {
     int testCurrentAdGroupIndex = 33;
     int testCurrentAdIndexInAdGroup = 11;
     Commands testCommands =
-        new Commands.Builder().addAllCommands().remove(Player.COMMAND_STOP).build();
+        new Commands.Builder()
+            .addAll(
+                COMMAND_GET_TIMELINE,
+                COMMAND_GET_TRACKS,
+                COMMAND_GET_CURRENT_MEDIA_ITEM,
+                COMMAND_GET_AUDIO_ATTRIBUTES,
+                COMMAND_GET_METADATA,
+                COMMAND_RELEASE)
+            .build();
     AtomicInteger stateRef = new AtomicInteger();
     AtomicReference<Timeline> timelineRef = new AtomicReference<>();
     AtomicReference<MediaMetadata> playlistMetadataRef = new AtomicReference<>();
@@ -1739,7 +1751,7 @@ public class MediaControllerListenerTest {
             });
 
     player.notifyAvailableCommandsChanged(
-        availableCommands.get().buildUpon().remove(Player.COMMAND_GET_TRACKS).build());
+        availableCommands.get().buildUpon().remove(COMMAND_GET_TRACKS).build());
 
     assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
     assertThat(capturedCurrentTracks).hasSize(2);
@@ -2582,7 +2594,7 @@ public class MediaControllerListenerTest {
             /* mediaItemIndex= */ 2,
             new MediaItem.Builder().setMediaId("media-id-2").build(),
             /* periodUid= */ null,
-            /* periodIndex= */ C.INDEX_UNSET,
+            /* periodIndex= */ 2,
             /* positionMs= */ 300L,
             /* contentPositionMs= */ 200L,
             /* adGroupIndex= */ 33,
@@ -2593,7 +2605,7 @@ public class MediaControllerListenerTest {
             /* mediaItemIndex= */ 3,
             new MediaItem.Builder().setMediaId("media-id-3").build(),
             /* periodUid= */ null,
-            /* periodIndex= */ C.INDEX_UNSET,
+            /* periodIndex= */ 3,
             /* positionMs= */ 0L,
             /* contentPositionMs= */ 0L,
             /* adGroupIndex= */ C.INDEX_UNSET,
@@ -2655,10 +2667,10 @@ public class MediaControllerListenerTest {
     PositionInfo newPositionInfo =
         new PositionInfo(
             /* windowUid= */ null,
-            /* mediaItemIndex= */ C.INDEX_UNSET,
+            /* mediaItemIndex= */ 0,
             /* mediaItem= */ null,
             /* periodUid= */ null,
-            /* periodIndex= */ C.INDEX_UNSET,
+            /* periodIndex= */ 0,
             testCurrentPositionMs,
             testContentPositionMs,
             testCurrentAdGroupIndex,
@@ -4032,6 +4044,49 @@ public class MediaControllerListenerTest {
     threadTestRule.getHandler().postAndSync(() -> controller.addListener(listener));
 
     MediaMetadata testMediaMetadata = new MediaMetadata.Builder().setTitle("title").build();
+    remoteSession.getMockPlayer().notifyMediaMetadataChanged(testMediaMetadata);
+
+    assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();
+    assertThat(mediaMetadataFromParamRef.get()).isEqualTo(testMediaMetadata);
+    assertThat(mediaMetadataFromGetterRef.get()).isEqualTo(testMediaMetadata);
+    assertThat(mediaMetadataFromOnEventsRef.get()).isEqualTo(testMediaMetadata);
+    assertThat(getEventsAsList(eventsRef.get()))
+        .containsExactly(Player.EVENT_MEDIA_METADATA_CHANGED);
+  }
+
+  @Test
+  public void onMediaMetadataChanged_withLargeArtworkData_isNotifiedAndUpdatesGetter()
+      throws Exception {
+    MediaController controller = controllerTestRule.createController(remoteSession.getToken());
+    CountDownLatch latch = new CountDownLatch(2);
+    AtomicReference<MediaMetadata> mediaMetadataFromParamRef = new AtomicReference<>();
+    AtomicReference<MediaMetadata> mediaMetadataFromGetterRef = new AtomicReference<>();
+    AtomicReference<MediaMetadata> mediaMetadataFromOnEventsRef = new AtomicReference<>();
+    AtomicReference<Player.Events> eventsRef = new AtomicReference<>();
+    Player.Listener listener =
+        new Player.Listener() {
+          @Override
+          public void onMediaMetadataChanged(MediaMetadata mediaMetadata) {
+            mediaMetadataFromParamRef.set(mediaMetadata);
+            mediaMetadataFromGetterRef.set(controller.getMediaMetadata());
+            latch.countDown();
+          }
+
+          @Override
+          public void onEvents(Player player, Player.Events events) {
+            mediaMetadataFromOnEventsRef.set(player.getMediaMetadata());
+            eventsRef.set(events);
+            latch.countDown();
+          }
+        };
+    threadTestRule.getHandler().postAndSync(() -> controller.addListener(listener));
+    byte[] largeArtworkData = new byte[4_000_000];
+    largeArtworkData[0] = (byte) 1234;
+    MediaMetadata testMediaMetadata =
+        new MediaMetadata.Builder()
+            .setArtworkData(largeArtworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+            .build();
+
     remoteSession.getMockPlayer().notifyMediaMetadataChanged(testMediaMetadata);
 
     assertThat(latch.await(TIMEOUT_MS, MILLISECONDS)).isTrue();

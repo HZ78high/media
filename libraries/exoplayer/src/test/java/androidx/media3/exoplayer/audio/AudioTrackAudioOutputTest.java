@@ -74,7 +74,7 @@ public final class AudioTrackAudioOutputTest {
 
   private void initializeAudioTrackAudioOutput() {
     initializeAudioTrackAudioOutput(
-        /* receiver= */ null,
+        /* listener= */ null,
         /* audioFormatEncoding= */ AudioFormat.ENCODING_PCM_16BIT,
         /* encoding= */ C.ENCODING_PCM_16BIT,
         /* channelMask= */ AudioFormat.CHANNEL_OUT_STEREO,
@@ -108,7 +108,7 @@ public final class AudioTrackAudioOutputTest {
             new OutputConfig.Builder()
                 .setEncoding(encoding)
                 .setSampleRate(sampleRate)
-                .setChannelConfig(channelMask)
+                .setChannelMask(channelMask)
                 .setBufferSize(1024)
                 .setAudioAttributes(
                     new AudioAttributes.Builder()

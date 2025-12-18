@@ -86,8 +86,6 @@ public final class Mp3Extractor implements Extractor {
   /**
    * Flag to force enable seeking using a constant bitrate assumption in cases where seeking would
    * otherwise not be possible.
-   *
-   * <p>This flag is ignored if {@link #FLAG_ENABLE_INDEX_SEEKING} is set.
    */
   public static final int FLAG_ENABLE_CONSTANT_BITRATE_SEEKING = 1;
 
@@ -101,16 +99,21 @@ public final class Mp3Extractor implements Extractor {
    *
    * <p>If this flag is set, then the behavior enabled by {@link
    * #FLAG_ENABLE_CONSTANT_BITRATE_SEEKING} is implicitly enabled.
-   *
-   * <p>This flag is ignored if {@link #FLAG_ENABLE_INDEX_SEEKING} is set.
    */
   public static final int FLAG_ENABLE_CONSTANT_BITRATE_SEEKING_ALWAYS = 1 << 1;
 
   /**
-   * Flag to enable index seeking, in which a time-to-byte mapping is built as the file is read. If
-   * other seeking metadata (e.g., Xing, VBRI, MLLT) is present in the file, it will be preferred
-   * for performance reasons. This flag allows index seeking to be used as a fallback in cases where
-   * no other seeking metadata is available.
+   * Flag to enable index seeking, in which a time-to-byte mapping is built as the file is read.
+   *
+   * <p>This is used as a fallback in two cases:
+   *
+   * <ul>
+   *   <li>The file contains metadata indicating it is VBR (e.g. Xing, VBRI or MLLT frames), but
+   *       doesn't contain enough information to support VBR-aware seeking (e.g. table of contents).
+   *   <li>The file is CBR (either indicated by explicit metadata, or absence of any VBR metadata),
+   *       the length of the file (in bytes) is not known, and {@link
+   *       #FLAG_ENABLE_CONSTANT_BITRATE_SEEKING_ALWAYS} is not set.
+   * </ul>
    *
    * <p>This seeker may require to scan a significant portion of the file to compute a seek point.
    * Therefore, it should only be used if one of the following is true:
@@ -136,13 +139,11 @@ public final class Mp3Extractor implements Extractor {
           ((id0 == 'C' && id1 == 'O' && id2 == 'M' && (id3 == 'M' || majorVersion == 2))
               || (id0 == 'M' && id1 == 'L' && id2 == 'L' && (id3 == 'T' || majorVersion == 2)));
 
-  /** The maximum number of bytes to search when synchronizing, before giving up. */
-  private static final int MAX_SYNC_BYTES = 128 * 1024;
-
   /**
-   * The maximum number of bytes to peek when sniffing, excluding the ID3 header, before giving up.
+   * The maximum number of bytes to peek when synchronizing or sniffing (excluding the ID3 header)
+   * before giving up.
    */
-  private static final int MAX_SNIFF_BYTES = 32 * 1024;
+  private static final int MAX_SEARCH_BYTES = 128 * 1024;
 
   /** Maximum length of data read into {@link #scratch}. */
   private static final int SCRATCH_LENGTH = 10;
@@ -380,7 +381,6 @@ public final class Mp3Extractor implements Extractor {
     int candidateSynchronizedHeaderData = 0;
     int peekedId3Bytes = 0;
     int searchedBytes = 0;
-    int searchLimitBytes = sniffing ? MAX_SNIFF_BYTES : MAX_SYNC_BYTES;
     input.resetPeekPosition();
     if (input.getPosition() == 0) {
       // We need to parse enough ID3 metadata to retrieve any gapless/seeking playback information
@@ -388,7 +388,7 @@ public final class Mp3Extractor implements Extractor {
       boolean parseAllId3Frames = (flags & FLAG_DISABLE_ID3_METADATA) == 0;
       Id3Decoder.FramePredicate id3FramePredicate =
           parseAllId3Frames ? null : REQUIRED_ID3_FRAME_PREDICATE;
-      metadata = id3Peeker.peekId3Data(input, id3FramePredicate, searchLimitBytes);
+      metadata = id3Peeker.peekId3Data(input, id3FramePredicate, MAX_SEARCH_BYTES);
       if (metadata != null) {
         gaplessInfoHolder.setFromMetadata(metadata);
       }
@@ -413,7 +413,7 @@ public final class Mp3Extractor implements Extractor {
               && !headersMatch(headerData, candidateSynchronizedHeaderData))
           || (frameSize = MpegAudioUtil.getFrameSize(headerData)) == C.LENGTH_UNSET) {
         // The header doesn't match the candidate header or is invalid. Try the next byte offset.
-        if (searchedBytes++ == searchLimitBytes) {
+        if (searchedBytes++ == MAX_SEARCH_BYTES) {
           if (!sniffing) {
             maybeUpdateCbrDurationToLastSample();
             throw new EOFException();
@@ -488,19 +488,22 @@ public final class Mp3Extractor implements Extractor {
       resultSeeker = seekFrameSeeker;
     }
 
-    if ((flags & FLAG_ENABLE_INDEX_SEEKING) != 0
-        && (resultSeeker == null || !resultSeeker.isSeekable())) {
-      long durationUs =
-          resultSeeker != null ? resultSeeker.getDurationUs() : getId3TlenUs(metadata);
-      long dataEndPosition =
-          resultSeeker != null ? resultSeeker.getDataEndPosition() : C.INDEX_UNSET;
+    if (resultSeeker == null) {
+      // We must assume the file is CBR as we found no seek or VBR info.
       resultSeeker =
-          new IndexSeeker(
-              durationUs, /* dataStartPosition= */ input.getPosition(), dataEndPosition);
+          getConstantBitrateSeeker(
+              input, (flags & FLAG_ENABLE_CONSTANT_BITRATE_SEEKING_ALWAYS) != 0);
     }
 
-    if (resultSeeker != null
-        && shouldFallbackToConstantBitrateSeeking(resultSeeker)
+    if ((flags & FLAG_ENABLE_INDEX_SEEKING) != 0 && !resultSeeker.isSeekable()) {
+      resultSeeker =
+          new IndexSeeker(
+              resultSeeker.getDurationUs(),
+              /* dataStartPosition= */ input.getPosition(),
+              resultSeeker.getDataEndPosition());
+    }
+
+    if (shouldFallbackToConstantBitrateSeeking(resultSeeker)
         && resultSeeker.getDurationUs() != C.TIME_UNSET
         && (resultSeeker.getDataEndPosition() != C.INDEX_UNSET
             || input.getLength() != C.LENGTH_UNSET)) {
@@ -531,7 +534,7 @@ public final class Mp3Extractor implements Extractor {
               bitrate,
               C.LENGTH_UNSET,
               /* allowSeeksIfLengthUnknown= */ false);
-    } else if (resultSeeker == null || shouldFallbackToConstantBitrateSeeking(resultSeeker)) {
+    } else if (shouldFallbackToConstantBitrateSeeking(resultSeeker)) {
       // Either we found no seek or VBR info, so we must assume the file is CBR (even without the
       // flag(s) being set), or an 'enable CBR seeking flag' is set and we found some seek info, but
       // not enough to do 'enhanced' CBR seeking with. In either case, we fall back to CBR seeking
@@ -545,7 +548,9 @@ public final class Mp3Extractor implements Extractor {
   }
 
   private boolean shouldFallbackToConstantBitrateSeeking(Seeker seeker) {
-    return !seeker.isSeekable() && (flags & FLAG_ENABLE_CONSTANT_BITRATE_SEEKING) != 0;
+    return !seeker.isSeekable()
+        && !(seeker instanceof ConstantBitrateSeeker)
+        && (flags & FLAG_ENABLE_CONSTANT_BITRATE_SEEKING) != 0;
   }
 
   /**

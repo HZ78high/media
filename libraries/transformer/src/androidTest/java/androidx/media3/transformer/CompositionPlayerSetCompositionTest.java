@@ -33,11 +33,11 @@ import androidx.media3.common.MediaItem.ClippingConfiguration;
 import androidx.media3.common.Player;
 import androidx.media3.common.Timeline;
 import androidx.media3.common.audio.AudioProcessor;
-import androidx.media3.common.audio.BaseAudioProcessor;
 import androidx.media3.common.audio.SpeedProvider;
 import androidx.media3.common.util.ConditionVariable;
 import androidx.media3.common.util.Util;
 import androidx.media3.test.utils.AssetInfo;
+import androidx.media3.test.utils.PassthroughAudioProcessor;
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.common.collect.ImmutableList;
@@ -110,13 +110,14 @@ public class CompositionPlayerSetCompositionTest {
                 @Override
                 public void onTimelineChanged(Timeline timeline, int reason) {
                   if (firstTimelineUpdated.compareAndSet(false, true)) {
-                    compositionPlayer.setComposition(createSingleSequenceComposition(video, video));
+                    compositionPlayer.setComposition(
+                        createSingleAudioVideoSequenceComposition(video, video));
                     compositionPlayer.play();
                   }
                   numberOfTimelineUpdates.incrementAndGet();
                 }
               });
-          compositionPlayer.setComposition(createSingleSequenceComposition(video));
+          compositionPlayer.setComposition(createSingleAudioVideoSequenceComposition(video));
           compositionPlayer.prepare();
         });
 
@@ -145,13 +146,14 @@ public class CompositionPlayerSetCompositionTest {
                       timeline.getWindow(/* windowIndex= */ 0, new Timeline.Window()).durationUs);
                   if (!firstTimelineUpdated.get()) {
                     compositionPlayer.setComposition(
-                        createSingleSequenceComposition(slowMediaItem));
+                        createSingleAudioVideoSequenceComposition(slowMediaItem));
                     compositionPlayer.play();
                     firstTimelineUpdated.set(true);
                   }
                 }
               });
-          compositionPlayer.setComposition(createSingleSequenceComposition(fastMediaItem));
+          compositionPlayer.setComposition(
+              createSingleAudioVideoSequenceComposition(fastMediaItem));
           compositionPlayer.prepare();
         });
 
@@ -179,7 +181,7 @@ public class CompositionPlayerSetCompositionTest {
           compositionPlayer.setVideoSurfaceView(surfaceView);
           compositionPlayer.addListener(playerTestListener);
           compositionPlayer.setComposition(
-              createSingleSequenceComposition(clippedEditedMediaItem),
+              createSingleAudioVideoSequenceComposition(clippedEditedMediaItem),
               /* startPositionMs= */ trimEndPositionMs);
           compositionPlayer.prepare();
           compositionPlayer.play();
@@ -193,7 +195,8 @@ public class CompositionPlayerSetCompositionTest {
         new EditedMediaItem.Builder(MediaItem.fromUri(MP4_ASSET.uri))
             .setDurationUs(MP4_ASSET.videoDurationUs)
             .build();
-    Composition composition = createSingleSequenceComposition(ImmutableList.of(editedMediaItem));
+    Composition composition =
+        createSingleAudioVideoSequenceComposition(ImmutableList.of(editedMediaItem));
     AtomicBoolean firstTimelineUpdated = new AtomicBoolean();
 
     instrumentation.runOnMainSync(
@@ -235,7 +238,7 @@ public class CompositionPlayerSetCompositionTest {
           }
         };
     Composition composition =
-        createSingleSequenceComposition(ImmutableList.of(editedMediaItem))
+        createSingleAudioVideoSequenceComposition(ImmutableList.of(editedMediaItem))
             .buildUpon()
             .setEffects(
                 new Effects(ImmutableList.of(passthroughAudioProcessor), ImmutableList.of()))
@@ -286,12 +289,12 @@ public class CompositionPlayerSetCompositionTest {
                 public void onTimelineChanged(Timeline timeline, int reason) {
                   if (!firstTimelineUpdated.get()) {
                     compositionPlayer.setComposition(
-                        createSingleSequenceComposition(clippedMediaItem));
+                        createSingleAudioVideoSequenceComposition(clippedMediaItem));
                     firstTimelineUpdated.set(true);
                   }
                   if (firstTimelineUpdated.get() && !secondTimelineUpdated.get()) {
                     compositionPlayer.setComposition(
-                        createSingleSequenceComposition(clippedMediaItem));
+                        createSingleAudioVideoSequenceComposition(clippedMediaItem));
                     secondTimelineUpdated.set(true);
                   }
                   if (firstTimelineUpdated.get() && secondTimelineUpdated.get()) {
@@ -299,7 +302,8 @@ public class CompositionPlayerSetCompositionTest {
                   }
                 }
               });
-          compositionPlayer.setComposition(createSingleSequenceComposition(fullMediaItem));
+          compositionPlayer.setComposition(
+              createSingleAudioVideoSequenceComposition(fullMediaItem));
           compositionPlayer.prepare();
         });
 
@@ -323,13 +327,14 @@ public class CompositionPlayerSetCompositionTest {
                 public void onTimelineChanged(Timeline timeline, int reason) {
                   if (!firstTimelineUpdated.get()) {
                     compositionPlayer.setComposition(
-                        createSingleSequenceComposition(fullMediaItem));
+                        createSingleAudioVideoSequenceComposition(fullMediaItem));
                     firstTimelineUpdated.set(true);
                     compositionPlayer.play();
                   }
                 }
               });
-          compositionPlayer.setComposition(createSingleSequenceComposition(fullMediaItem));
+          compositionPlayer.setComposition(
+              createSingleAudioVideoSequenceComposition(fullMediaItem));
           compositionPlayer.prepare();
         });
 
@@ -355,12 +360,13 @@ public class CompositionPlayerSetCompositionTest {
                 public void onTimelineChanged(Timeline timeline, int reason) {
                   if (firstTimelineUpdated.compareAndSet(false, true)) {
                     compositionPlayer.setComposition(
-                        createSingleSequenceComposition(fullMediaItem));
+                        createSingleAudioVideoSequenceComposition(fullMediaItem));
                     compositionPlayer.play();
                   }
                 }
               });
-          compositionPlayer.setComposition(createSingleSequenceComposition(fullMediaItem));
+          compositionPlayer.setComposition(
+              createSingleAudioVideoSequenceComposition(fullMediaItem));
           compositionPlayer.setVideoFrameMetadataListener(
               (presentationTimeUs, releaseTimeNs, format, mediaFormat) -> {
                 videoFrameMetadataListenerCalled.set(true);
@@ -445,7 +451,8 @@ public class CompositionPlayerSetCompositionTest {
                     /* videoEffects= */ ImmutableList.of()))
             .build();
     final Composition composition =
-        new Composition.Builder(new EditedMediaItemSequence.Builder(editedMediaItem).build())
+        new Composition.Builder(
+                EditedMediaItemSequence.withAudioFrom(ImmutableList.of(editedMediaItem)))
             .setEffects(
                 new Effects(
                     /* audioProcessors= */ ImmutableList.of(compositionAudioProcessor),
@@ -496,7 +503,8 @@ public class CompositionPlayerSetCompositionTest {
             .setEffects(new Effects(ImmutableList.of(itemAudioProcessor), ImmutableList.of()))
             .build();
     final Composition composition =
-        new Composition.Builder(new EditedMediaItemSequence.Builder(item1, item2).build())
+        new Composition.Builder(
+                EditedMediaItemSequence.withAudioFrom(ImmutableList.of(item1, item2)))
             .setEffects(
                 new Effects(ImmutableList.of(compositionAudioProcessor), ImmutableList.of()))
             .build();
@@ -533,13 +541,11 @@ public class CompositionPlayerSetCompositionTest {
             .build();
     Composition firstComposition =
         new Composition.Builder(
-                new EditedMediaItemSequence.Builder(Collections.nCopies(5, editedMediaItem))
-                    .build())
+                EditedMediaItemSequence.withAudioFrom(Collections.nCopies(5, editedMediaItem)))
             .build();
     Composition secondComposition =
         new Composition.Builder(
-                new EditedMediaItemSequence.Builder(Collections.nCopies(5, editedMediaItem))
-                    .build())
+                EditedMediaItemSequence.withAudioFrom(Collections.nCopies(5, editedMediaItem)))
             .setEffects(
                 new Effects(
                     /* audioProcessors= */ ImmutableList.of(secondCompositionAudioProcessor),
@@ -589,7 +595,7 @@ public class CompositionPlayerSetCompositionTest {
                 }
               });
           compositionPlayer.setComposition(
-              createSingleSequenceComposition(
+              createSingleAudioVideoSequenceComposition(
                   Collections.nCopies(numberOfItemsInSequence, editedMediaItem)),
               Util.usToMs(startPositionUs));
           compositionPlayer.prepare();
@@ -611,9 +617,9 @@ public class CompositionPlayerSetCompositionTest {
         .build();
   }
 
-  private static Composition createSingleSequenceComposition(
+  private static Composition createSingleAudioVideoSequenceComposition(
       List<EditedMediaItem> editedMediaItems) {
-    return new Composition.Builder(new EditedMediaItemSequence.Builder(editedMediaItems).build())
+    return new Composition.Builder(EditedMediaItemSequence.withAudioAndVideoFrom(editedMediaItems))
         .build();
   }
 
@@ -628,9 +634,9 @@ public class CompositionPlayerSetCompositionTest {
         .build();
   }
 
-  private static Composition createSingleSequenceComposition(
+  private static Composition createSingleAudioVideoSequenceComposition(
       EditedMediaItem editedMediaItem, EditedMediaItem... moreEditedMediaItems) {
-    return createSingleSequenceComposition(
+    return createSingleAudioVideoSequenceComposition(
         new ImmutableList.Builder<EditedMediaItem>()
             .add(editedMediaItem)
             .add(moreEditedMediaItems)
@@ -654,22 +660,6 @@ public class CompositionPlayerSetCompositionTest {
     public long getNextSpeedChangeTimeUs(long timeUs) {
       // Adjust speed for all timestamps.
       return C.TIME_UNSET;
-    }
-  }
-
-  private static class PassthroughAudioProcessor extends BaseAudioProcessor {
-    @Override
-    public void queueInput(ByteBuffer inputBuffer) {
-      if (!inputBuffer.hasRemaining()) {
-        return;
-      }
-      ByteBuffer buffer = this.replaceOutputBuffer(inputBuffer.remaining());
-      buffer.put(inputBuffer).flip();
-    }
-
-    @Override
-    protected AudioFormat onConfigure(AudioFormat inputAudioFormat) {
-      return inputAudioFormat;
     }
   }
 }

@@ -56,6 +56,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsCollector;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.analytics.DefaultAnalyticsCollector;
 import androidx.media3.exoplayer.analytics.PlayerId;
+import androidx.media3.exoplayer.audio.AudioOutputProvider;
 import androidx.media3.exoplayer.audio.AudioSink;
 import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer;
 import androidx.media3.exoplayer.image.ImageOutput;
@@ -237,6 +238,7 @@ public interface ExoPlayer extends Player {
     /* package */ Supplier<LoadControl> loadControlSupplier;
     /* package */ Supplier<BandwidthMeter> bandwidthMeterSupplier;
     /* package */ Function<Clock, AnalyticsCollector> analyticsCollectorFunction;
+    @Nullable /* package */ AudioOutputProvider audioOutputProvider;
     /* package */ Looper looper;
     /* package */ @C.Priority int priority;
     @Nullable /* package */ PriorityTaskManager priorityTaskManager;
@@ -294,6 +296,8 @@ public interface ExoPlayer extends Player {
      *       Looper} of the application's main thread if the current thread doesn't have a {@link
      *       Looper}
      *   <li>{@link AnalyticsCollector}: {@link AnalyticsCollector} with {@link Clock#DEFAULT}
+     *   <li>{@link AudioOutputProvider}: The {@link AudioOutputProvider} configured by the {@link
+     *       RenderersFactory}.
      *   <li>{@link C.Priority}: {@link C#PRIORITY_PLAYBACK}
      *   <li>{@link PriorityTaskManager}: {@code null} (not used)
      *   <li>{@link AudioAttributes}: {@link AudioAttributes#DEFAULT}, not handling audio focus
@@ -674,6 +678,20 @@ public interface ExoPlayer extends Player {
       checkState(!buildCalled);
       checkNotNull(analyticsCollector);
       this.analyticsCollectorFunction = (clock) -> analyticsCollector;
+      return this;
+    }
+
+    /**
+     * Sets the {@link AudioOutputProvider} that will be used to play out audio data.
+     *
+     * @param audioOutputProvider An {@link AudioOutputProvider}.
+     * @return This builder.
+     * @throws IllegalStateException If {@link #build()} has already been called.
+     */
+    @CanIgnoreReturnValue
+    public Builder setAudioOutputProvider(AudioOutputProvider audioOutputProvider) {
+      checkState(!buildCalled);
+      this.audioOutputProvider = checkNotNull(audioOutputProvider);
       return this;
     }
 
@@ -2007,4 +2025,88 @@ public interface ExoPlayer extends Player {
    */
   @UnstableApi
   void setImageOutput(@Nullable ImageOutput imageOutput);
+
+  /**
+   * Sets a collection of parameters on the underlying audio codecs.
+   *
+   * <p>This method is asynchronous. The parameters will be applied to the audio renderers on the
+   * playback thread.
+   *
+   * <p>The default {@link MediaCodec} based renderers only support this feature on API level 29 and
+   * above. If an underlying decoder does not support a parameter, it will be ignored.
+   *
+   * @param codecParameters The {@link CodecParameters} to set.
+   */
+  @UnstableApi
+  void setAudioCodecParameters(CodecParameters codecParameters);
+
+  /**
+   * Adds a listener for audio codec parameter changes.
+   *
+   * <p>The listener will be called on the application thread. Upon registration, the listener will
+   * be immediately called with the last known values for the subscribed keys.
+   *
+   * <p>The default {@link MediaCodec} based renderers only support this feature on API level 29 and
+   * above.
+   *
+   * <p><b>Note:</b> When used with {@link MediaCodec}, observing vendor-specific parameter changes
+   * requires API level 31 or higher. On API levels 29 and 30, any requested vendor-specific keys
+   * will be ignored.
+   *
+   * @param listener The {@link CodecParametersChangeListener} to add.
+   * @param keys The list of parameter keys to subscribe to.
+   */
+  @UnstableApi
+  void addAudioCodecParametersChangeListener(
+      CodecParametersChangeListener listener, List<String> keys);
+
+  /**
+   * Removes a listener for audio codec parameter changes.
+   *
+   * @param listener The {@link CodecParametersChangeListener} to remove.
+   */
+  @UnstableApi
+  void removeAudioCodecParametersChangeListener(CodecParametersChangeListener listener);
+
+  /**
+   * Sets a collection of parameters on the underlying video codecs.
+   *
+   * <p>This method is asynchronous. The parameters will be applied to the video renderers on the
+   * playback thread.
+   *
+   * <p>The default {@link MediaCodec} based renderers only support this feature on API level 29 and
+   * above. If an underlying decoder does not support a parameter, it will be ignored.
+   *
+   * @param codecParameters The {@link CodecParameters} to set.
+   */
+  @UnstableApi
+  void setVideoCodecParameters(CodecParameters codecParameters);
+
+  /**
+   * Adds a listener for video codec parameter changes.
+   *
+   * <p>The listener will be called on the application thread. Upon registration, the listener will
+   * be immediately called with the last known values for the subscribed keys.
+   *
+   * <p>The default {@link MediaCodec} based renderers only support this feature on API level 29 and
+   * above.
+   *
+   * <p><b>Note:</b> When used with {@link MediaCodec}, observing vendor-specific parameter changes
+   * requires API level 31 or higher. On API levels 29 and 30, any requested vendor-specific keys
+   * will be ignored.
+   *
+   * @param listener The {@link CodecParametersChangeListener} to add.
+   * @param keys The list of parameter keys to subscribe to.
+   */
+  @UnstableApi
+  void addVideoCodecParametersChangeListener(
+      CodecParametersChangeListener listener, List<String> keys);
+
+  /**
+   * Removes a listener for video codec parameter changes.
+   *
+   * @param listener The {@link CodecParametersChangeListener} to remove.
+   */
+  @UnstableApi
+  void removeVideoCodecParametersChangeListener(CodecParametersChangeListener listener);
 }

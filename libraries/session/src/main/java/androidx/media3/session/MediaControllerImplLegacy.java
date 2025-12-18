@@ -78,6 +78,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
@@ -604,7 +605,16 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
   @Override
   public ListenableFuture<SessionResult> sendCustomCommand(SessionCommand command, Bundle args) {
     if (controllerCompat != null) {
-      controllerCompat.getTransportControls().sendCustomAction(command.customAction, args);
+      Bundle extras;
+      if (args.isEmpty()) {
+        extras = command.customExtras;
+      } else if (command.customExtras.isEmpty()) {
+        extras = args;
+      } else {
+        extras = new Bundle(command.customExtras);
+        extras.putAll(args);
+      }
+      controllerCompat.getTransportControls().sendCustomAction(command.customAction, extras);
       return Futures.immediateFuture(new SessionResult(SessionResult.RESULT_SUCCESS));
     } else {
       return Futures.immediateFuture(
@@ -1904,14 +1914,13 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
       if (event == null) {
         return;
       }
+      Bundle nonNullExtras = extras == null ? Bundle.EMPTY : extras;
       getInstance()
           .notifyControllerListener(
               listener ->
                   ignoreFuture(
                       listener.onCustomCommand(
-                          getInstance(),
-                          new SessionCommand(event, /* extras= */ Bundle.EMPTY),
-                          extras == null ? Bundle.EMPTY : extras)));
+                          getInstance(), new SessionCommand(event, nonNullExtras), nonNullExtras)));
     }
 
     @Override
@@ -2018,6 +2027,8 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
     SessionCommands availableSessionCommands;
     Commands availablePlayerCommands;
     ImmutableList<CommandButton> mediaButtonPreferences;
+
+    preserveExistingBitmapData(oldLegacyPlayerInfo, newLegacyPlayerInfo);
 
     boolean isQueueChanged = oldLegacyPlayerInfo.queue != newLegacyPlayerInfo.queue;
     currentTimeline =
@@ -2491,7 +2502,31 @@ import org.checkerframework.checker.initialization.qual.UnderInitialization;
         /* contentBufferedPositionMs= */ bufferedPositionMs);
   }
 
-  // Media 1.0 variables
+  private static void preserveExistingBitmapData(
+      LegacyPlayerInfo oldInfo, LegacyPlayerInfo newInfo) {
+    if (oldInfo.mediaMetadataCompat != null && newInfo.mediaMetadataCompat != null) {
+      newInfo.mediaMetadataCompat.preserveArtworkBitmapData(oldInfo.mediaMetadataCompat);
+    }
+    if (oldInfo.queue != newInfo.queue) {
+      HashMap<Long, QueueItem> oldQueueItems = new HashMap<>();
+      for (int i = 0; i < oldInfo.queue.size(); i++) {
+        QueueItem oldItem = oldInfo.queue.get(i);
+        if (oldItem.getDescription().getIconBitmap() != null) {
+          oldQueueItems.put(oldItem.getQueueId(), oldItem);
+        }
+      }
+      for (int i = 0; i < newInfo.queue.size(); i++) {
+        QueueItem newItem = newInfo.queue.get(i);
+        if (newItem.getDescription().getIconBitmap() != null) {
+          @Nullable QueueItem oldItem = oldQueueItems.get(newItem.getQueueId());
+          if (oldItem != null) {
+            newItem.getDescription().preserveIconBitmapData(oldItem.getDescription());
+          }
+        }
+      }
+    }
+  }
+
   private static final class LegacyPlayerInfo {
 
     @Nullable public final MediaControllerCompat.PlaybackInfo playbackInfoCompat;

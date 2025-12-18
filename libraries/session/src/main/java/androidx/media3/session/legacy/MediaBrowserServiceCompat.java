@@ -15,6 +15,7 @@
  */
 package androidx.media3.session.legacy;
 
+import static android.os.Looper.myLooper;
 import static androidx.annotation.RestrictTo.Scope.LIBRARY;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_ADD_SUBSCRIPTION;
 import static androidx.media3.session.legacy.MediaBrowserProtocol.CLIENT_MSG_GET_MEDIA_ITEM;
@@ -66,7 +67,6 @@ import android.os.RemoteException;
 import android.service.media.MediaBrowserService;
 import android.support.v4.os.ResultReceiver;
 import android.text.TextUtils;
-import android.util.Log;
 import androidx.annotation.CallSuper;
 import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
@@ -75,6 +75,7 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.collection.ArrayMap;
 import androidx.core.util.Pair;
+import androidx.media3.common.util.Log;
 import androidx.media3.common.util.NullableType;
 import androidx.media3.common.util.Util;
 import androidx.media3.session.legacy.MediaSessionManager.RemoteUserInfo;
@@ -119,7 +120,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 @RestrictTo(LIBRARY)
 public abstract class MediaBrowserServiceCompat extends Service {
   static final String TAG = "MBServiceCompat";
-  static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
   private static final float EPSILON = 0.00001f;
 
@@ -565,6 +565,7 @@ public abstract class MediaBrowserServiceCompat extends Service {
 
     @MainThread
     ServiceHandler(MediaBrowserServiceCompat service) {
+      super(checkNotNull(myLooper()));
       this.service = service;
     }
 
@@ -1542,15 +1543,13 @@ public abstract class MediaBrowserServiceCompat extends Service {
           @Override
           void onResultSent(@Nullable List<MediaBrowserCompat.MediaItem> list) {
             if (connections.get(checkNotNull(connection.callbacks).asBinder()) != connection) {
-              if (DEBUG) {
-                Log.d(
-                    TAG,
-                    "Not sending onLoadChildren result for connection that has"
-                        + " been disconnected. pkg="
-                        + connection.pkg
-                        + " id="
-                        + parentId);
-              }
+              Log.d(
+                  TAG,
+                  "Not sending onLoadChildren result for connection that has"
+                      + " been disconnected. pkg="
+                      + connection.pkg
+                      + " id="
+                      + parentId);
               return;
             }
 

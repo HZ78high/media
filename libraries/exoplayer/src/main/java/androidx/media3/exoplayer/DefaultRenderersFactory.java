@@ -16,6 +16,8 @@
 package androidx.media3.exoplayer;
 
 import static android.os.Build.VERSION.SDK_INT;
+import static androidx.media3.exoplayer.video.MediaCodecVideoRenderer.DEFAULT_LATE_THRESHOLD_TO_DROP_DECODER_INPUT_US;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
 import android.content.Context;
@@ -28,6 +30,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.media3.common.C;
 import androidx.media3.common.MimeTypes;
+import androidx.media3.common.util.ExperimentalApi;
 import androidx.media3.common.util.Log;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.audio.AudioOutput;
@@ -117,6 +120,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
   private boolean parseAv1SampleDependencies;
   private long lateThresholdToDropDecoderInputUs;
   private boolean enableMediaCodecBufferDecodeOnlyFlag;
+  private boolean enableMediaCodecVideoRendererDurationToProgressUs;
 
   /**
    * @param context A {@link Context}.
@@ -127,7 +131,8 @@ public class DefaultRenderersFactory implements RenderersFactory {
     extensionRendererMode = EXTENSION_RENDERER_MODE_OFF;
     allowedVideoJoiningTimeMs = DEFAULT_ALLOWED_VIDEO_JOINING_TIME_MS;
     mediaCodecSelector = MediaCodecSelector.DEFAULT;
-    lateThresholdToDropDecoderInputUs = C.TIME_UNSET;
+    parseAv1SampleDependencies = true;
+    lateThresholdToDropDecoderInputUs = DEFAULT_LATE_THRESHOLD_TO_DROP_DECODER_INPUT_US;
   }
 
   /**
@@ -301,7 +306,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
    * enabled. Knowing which input frames are not depended on can speed up seeking and reduce dropped
    * frames.
    *
-   * <p>Defaults to {@code false}.
+   * <p>Defaults to {@code true}.
    *
    * <p>This method is experimental and will be renamed or removed in a future release.
    *
@@ -335,6 +340,34 @@ public class DefaultRenderersFactory implements RenderersFactory {
   }
 
   /**
+   * Sets whether {@link MediaCodecVideoRenderer} supports {@link Renderer#getDurationToProgressUs
+   * getDurationToProgressUs}.
+   *
+   * <p>When ExoPlayer's {@link ExoPlayer.Builder#experimentalSetDynamicSchedulingEnabled dynamic
+   * scheduling} is enabled, ExoPlayer uses {@link Renderer#getDurationToProgressUs} to better align
+   * when it wakes the CPU with when player progress can be made.
+   *
+   * <p>If {@code true}, then {@link MediaCodecVideoRenderer} will support {@link
+   * Renderer#getDurationToProgressUs getDurationToProgressUs} and only if its {@link MediaCodec}
+   * decoder is set up in asynchronous mode with a registered {@link MediaCodec.Callback} listener.
+   * With these conditions met {@link ExoPlayer} will adjust its task scheduling with when {@link
+   * MediaCodecVideoRenderer} can schedule its next output. This will increase CPU Idle time thereby
+   * reducing power consumption. The default value is {@code false}.
+   *
+   * <p>This method is experimental and will be renamed or removed in a future release.
+   *
+   * @see ExoPlayer.Builder#experimentalSetDynamicSchedulingEnabled
+   */
+  @CanIgnoreReturnValue
+  @ExperimentalApi
+  public DefaultRenderersFactory setEnableMediaCodecVideoRendererDurationToProgressUs(
+      boolean enableMediaCodecVideoRendererDurationToProgressUs) {
+    this.enableMediaCodecVideoRendererDurationToProgressUs =
+        enableMediaCodecVideoRendererDurationToProgressUs;
+    return this;
+  }
+
+  /**
    * Sets the maximum duration for which video renderers can attempt to seamlessly join an ongoing
    * playback.
    *
@@ -355,12 +388,16 @@ public class DefaultRenderersFactory implements RenderersFactory {
    * Sets the late threshold for rendered output buffers, in microseconds, after which decoder input
    * buffers may be dropped.
    *
-   * <p>The default value is {@link C#TIME_UNSET} and therefore no input buffers will be dropped due
-   * to this logic.
+   * <p>The default value is {@link
+   * MediaCodecVideoRenderer#DEFAULT_LATE_THRESHOLD_TO_DROP_DECODER_INPUT_US} and therefore input
+   * buffers that are predicted to be rendered late will be dropped.
+   *
+   * <p>If {@link C#TIME_UNSET} is passed, decoder input buffers will not be dropped.
    *
    * <p>This method is experimental and will be renamed or removed in a future release.
    *
-   * @param lateThresholdToDropDecoderInputUs The threshold.
+   * @param lateThresholdToDropDecoderInputUs The threshold in microseconds to drop decoder input
+   *     buffers, or {@link C#TIME_UNSET} to disable dropping decoder input buffers.
    */
   @CanIgnoreReturnValue
   public final DefaultRenderersFactory experimentalSetLateThresholdToDropDecoderInputUs(
@@ -452,7 +489,8 @@ public class DefaultRenderersFactory implements RenderersFactory {
             .setEventListener(eventListener)
             .setMaxDroppedFramesToNotify(MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY)
             .experimentalSetParseAv1SampleDependencies(parseAv1SampleDependencies)
-            .experimentalSetLateThresholdToDropDecoderInputUs(lateThresholdToDropDecoderInputUs);
+            .experimentalSetLateThresholdToDropDecoderInputUs(lateThresholdToDropDecoderInputUs)
+            .setEnableDurationToProgressUs(enableMediaCodecVideoRendererDurationToProgressUs);
     if (SDK_INT >= 34) {
       videoRendererBuilder =
           videoRendererBuilder.experimentalSetEnableMediaCodecBufferDecodeOnlyFlag(
@@ -693,24 +731,28 @@ public class DefaultRenderersFactory implements RenderersFactory {
     }
 
     try {
-      // Full class names used for constructor args so the LINT rule triggers if any of them move.
       // LINT.IfChange
-      Class<?> clazz = Class.forName("androidx.media3.decoder.iamf.LibiamfAudioRenderer");
-      // Full class names used for media3 constructor args so the LINT rule triggers if any of them
-      // move.
+      Class<?> builderClass =
+          Class.forName("androidx.media3.decoder.iamf.IamfAudioRenderer$Builder");
+      // Full class names used for media3 constructor args so the LINT rule triggers if any move.
       @SuppressWarnings("UnnecessarilyFullyQualified")
-      Constructor<?> constructor =
-          clazz.getConstructor(
-              Context.class,
-              Handler.class,
-              androidx.media3.exoplayer.audio.AudioRendererEventListener.class,
-              androidx.media3.exoplayer.audio.AudioSink.class);
+      Constructor<?> builderConstructor =
+          builderClass.getConstructor(
+              Context.class, androidx.media3.exoplayer.audio.AudioSink.class);
+      Object builder = builderConstructor.newInstance(context, audioSink);
+      // Full class names used for media3 constructor args so the LINT rule triggers if any move.
+      @SuppressWarnings("UnnecessarilyFullyQualified")
+      Class<?> audioRenderEventListenerClass =
+          androidx.media3.exoplayer.audio.AudioRendererEventListener.class;
+      builderClass
+          .getMethod("setEventHandlerAndListener", Handler.class, audioRenderEventListenerClass)
+          .invoke(builder, eventHandler, eventListener);
+      Renderer renderer = (Renderer) builderClass.getMethod("build").invoke(builder);
       // LINT.ThenChange(../../../../../../proguard-rules.txt)
-      Renderer renderer =
-          (Renderer) constructor.newInstance(context, eventHandler, eventListener, audioSink);
+      checkNotNull(renderer);
       out.add(extensionRendererIndex++, renderer);
-      Log.i(TAG, "Loaded LibiamfAudioRenderer.");
-    } catch (ClassNotFoundException e) {
+      Log.i(TAG, "Loaded IamfAudioRenderer.");
+    } catch (ReflectiveOperationException e) {
       // Expected if the app was built without the extension.
     } catch (Exception e) {
       // The extension is present, but instantiation failed.
@@ -718,13 +760,17 @@ public class DefaultRenderersFactory implements RenderersFactory {
     }
 
     try {
-      // Full class names used for constructor args so the LINT rule triggers if any of them move.
+      // LINT.IfChange
       Class<?> clazz = Class.forName("androidx.media3.decoder.mpegh.MpeghAudioRenderer");
+      // Full class names used for media3 constructor args so the LINT rule triggers if any of them
+      // move.
+      @SuppressWarnings("UnnecessarilyFullyQualified")
       Constructor<?> constructor =
           clazz.getConstructor(
               Handler.class,
               androidx.media3.exoplayer.audio.AudioRendererEventListener.class,
               androidx.media3.exoplayer.audio.AudioSink.class);
+      // LINT.ThenChange(../../../../../../proguard-rules.txt)
       Renderer renderer =
           (Renderer) constructor.newInstance(eventHandler, eventListener, audioSink);
       out.add(extensionRendererIndex++, renderer);
@@ -803,6 +849,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
    * @param context The {@link Context} associated with the player.
    * @param out An array to which the built renderers should be appended.
    */
+  @SuppressWarnings("deprecation") // Forwarding to deprecated method for compatibility.
   protected void buildImageRenderers(Context context, ArrayList<Renderer> out) {
     buildImageRenderers(out);
   }

@@ -1468,6 +1468,7 @@ public final class BoxParser {
     @C.ColorTransfer int colorTransfer = Format.NO_VALUE;
     // The format of HDR static info is defined in CTA-861-G:2017, Table 45.
     @Nullable ByteBuffer hdrStaticInfo = null;
+    @Nullable DolbyVisionConfig dolbyVisionConfig = null;
 
     while (childPosition - position < size) {
       parent.setPosition(childPosition);
@@ -1607,11 +1608,7 @@ public final class BoxParser {
               false, "initializationData must already be set from hvcC or avcC atom");
         }
         parent.setPosition(childStartPosition + Mp4Box.HEADER_SIZE);
-        @Nullable DolbyVisionConfig dolbyVisionConfig = DolbyVisionConfig.parse(parent);
-        if (dolbyVisionConfig != null) {
-          codecs = dolbyVisionConfig.codecs;
-          mimeType = MimeTypes.VIDEO_DOLBY_VISION;
-        }
+        dolbyVisionConfig = DolbyVisionConfig.parse(parent);
       } else if (childAtomType == Mp4Box.TYPE_vpcC) {
         ExtractorUtil.checkContainerInput(mimeType == null, /* message= */ null);
         mimeType = (atomType == Mp4Box.TYPE_vp08) ? MimeTypes.VIDEO_VP8 : MimeTypes.VIDEO_VP9;
@@ -1778,6 +1775,11 @@ public final class BoxParser {
         }
       }
       childPosition += childAtomSize;
+    }
+
+    if (dolbyVisionConfig != null) {
+      mimeType = MimeTypes.VIDEO_DOLBY_VISION;
+      codecs = dolbyVisionConfig.codecs;
     }
 
     // If the media type was not recognized, ignore the track.
@@ -2927,7 +2929,7 @@ public final class BoxParser {
       int fixedSampleSize = data.readUnsignedIntToInt();
       if (MimeTypes.AUDIO_RAW.equals(trackFormat.sampleMimeType)) {
         int pcmFrameSize = Util.getPcmFrameSize(trackFormat.pcmEncoding, trackFormat.channelCount);
-        if (fixedSampleSize == 0 || fixedSampleSize % pcmFrameSize != 0) {
+        if (fixedSampleSize % pcmFrameSize != 0) {
           // The sample size from the stsz box is inconsistent with the PCM encoding and channel
           // count derived from the stsd box. Choose stsd box as source of truth
           // [Internal ref: b/171627904].

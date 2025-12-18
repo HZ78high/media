@@ -60,7 +60,10 @@ public final class DashWidevineOfflineTest {
   private OfflineLicenseHelper offlineLicenseHelper;
   private byte[] offlineLicenseKeySetId;
 
-  @Rule public ActivityTestRule<HostActivity> testRule = new ActivityTestRule<>(HostActivity.class);
+  // TODO: b/464266190 - Migrate to ActivityScenarioRule
+  @SuppressWarnings("deprecation")
+  @Rule
+  public ActivityTestRule<HostActivity> testRule = new ActivityTestRule<>(HostActivity.class);
 
   @Before
   public void setUp() throws Exception {
@@ -104,7 +107,7 @@ public final class DashWidevineOfflineTest {
   @Ignore(
       "Needs to be reconfigured/rewritten with an offline-compatible licence [internal"
           + " b/176960595].")
-  public void widevineOfflineLicense() throws Exception {
+  public void widevineOfflineLicenseV22() throws Exception {
     downloadLicense();
     testRunner.run();
 
@@ -117,7 +120,7 @@ public final class DashWidevineOfflineTest {
   @Ignore(
       "Needs to be reconfigured/rewritten with an offline-compatible licence [internal"
           + " b/176960595].")
-  public void widevineOfflineReleasedLicense() throws Throwable {
+  public void widevineOfflineReleasedLicenseV22() throws Throwable {
     assumeTrue(SDK_INT <= 28);
 
     downloadLicense();
@@ -167,7 +170,7 @@ public final class DashWidevineOfflineTest {
   @Ignore(
       "Needs to be reconfigured/rewritten with an offline-compatible licence [internal"
           + " b/176960595].")
-  public void widevineOfflineExpiredLicense() throws Exception {
+  public void widevineOfflineExpiredLicenseV22() throws Exception {
     downloadLicense();
 
     // Wait until the license expires
@@ -197,7 +200,7 @@ public final class DashWidevineOfflineTest {
   @Ignore(
       "Needs to be reconfigured/rewritten with an offline-compatible licence [internal"
           + " b/176960595].")
-  public void widevineOfflineLicenseExpiresOnPause() throws Exception {
+  public void widevineOfflineLicenseExpiresOnPauseV22() throws Exception {
     downloadLicense();
 
     // During playback pause until the license expires then continue playback

@@ -26,6 +26,7 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.common.audio.SpeedChangingAudioProcessor;
 import androidx.media3.common.audio.SpeedProvider;
+import androidx.media3.common.audio.ToInt16PcmAudioProcessor;
 import androidx.media3.effect.TimestampAdjustment;
 import androidx.media3.test.utils.TestSpeedProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -231,47 +232,18 @@ public final class EditedMediaItemBuilderTest {
   }
 
   @Test
-  public void setSpeed_withSetSpeedChangingEffects_doesNotThrow() {
-    TimestampAdjustment timestampAdjustment =
-        new TimestampAdjustment((inputTimeUs, outputTimeConsumer) -> {}, SPEED_PROVIDER_2X);
-    SpeedChangingAudioProcessor processor = new SpeedChangingAudioProcessor(SPEED_PROVIDER_2X);
-    EditedMediaItem unused =
+  public void setPreProcessingAudioProcessors_populatesPreProcessingAudioProcessors() {
+    ToInt16PcmAudioProcessor processor = new ToInt16PcmAudioProcessor();
+    EditedMediaItem item =
         new EditedMediaItem.Builder(MediaItem.EMPTY)
-            .setSpeed(SPEED_PROVIDER_2X)
-            .setSpeedChangingEffects(processor, timestampAdjustment)
+            .setPreProcessingAudioProcessors(ImmutableList.of(processor))
             .build();
-  }
 
-  @Test
-  public void setSpeed_withSetSpeedChangingEffects_throwsWithMismatchingSpeedProviders() {
-    SpeedChangingAudioProcessor processor = new SpeedChangingAudioProcessor(SpeedProvider.DEFAULT);
-    assertThrows(
-        IllegalStateException.class,
-        () ->
-            new EditedMediaItem.Builder(MediaItem.EMPTY)
-                .setSpeed(SPEED_PROVIDER_2X)
-                .setSpeedChangingEffects(processor, /* effect= */ null)
-                .build());
-  }
+    assertThat(item.preProcessingAudioProcessors).containsExactly(processor);
 
-  @Test
-  public void setSpeedChangingEffects_withMismatchingSpeedProviders_throws() {
-    TimestampAdjustment timestampAdjustment =
-        new TimestampAdjustment((inputTimeUs, outputTimeConsumer) -> {}, SPEED_PROVIDER_2X);
-    SpeedChangingAudioProcessor processor = new SpeedChangingAudioProcessor(SpeedProvider.DEFAULT);
-    assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            new EditedMediaItem.Builder(MediaItem.EMPTY)
-                .setSpeedChangingEffects(processor, timestampAdjustment)
-                .build());
-  }
+    EditedMediaItem duplicateItem = item.buildUpon().build();
 
-  @Test
-  public void getDurationAfterEffectsApplied_withSpeedProvider_returnsCorrectDuration() {
-    EditedMediaItem editedMediaItem =
-        new EditedMediaItem.Builder(MediaItem.EMPTY).setSpeed(SPEED_PROVIDER_2X).build();
-    assertThat(editedMediaItem.getDurationAfterEffectsApplied(1_000_000)).isEqualTo(500_000);
+    assertThat(duplicateItem.preProcessingAudioProcessors).containsExactly(processor);
   }
 
   @Test

@@ -19,23 +19,23 @@ package androidx.media3.transformer;
 import static androidx.media3.common.util.Util.msToUs;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
 
 import android.content.Context;
-import android.graphics.SurfaceTexture;
-import android.view.Surface;
 import androidx.media3.common.GlTextureInfo;
 import androidx.media3.effect.GlTextureFrame;
 import androidx.media3.exoplayer.ExoPlaybackException;
 import androidx.media3.exoplayer.video.VideoFrameReleaseControl;
 import androidx.media3.exoplayer.video.VideoFrameReleaseControl.FrameTimingEvaluator;
 import androidx.media3.test.utils.FakeClock;
+import androidx.media3.test.utils.RecordingPacketConsumer;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.common.collect.ImmutableList;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -48,7 +48,7 @@ public class CompositionVideoPacketReleaseControlTest {
   private VideoFrameReleaseControl videoFrameReleaseControl;
   private FakeFrameTimingEvaluator fakeFrameTimingEvaluator;
   private FakeClock fakeClock;
-  private ArrayList<List<GlTextureFrame>> outputPackets;
+  private RecordingPacketConsumer outputConsumer;
   private Set<GlTextureInfo> releasedTextures;
   // The first packet is required to be sent to the CompositionVideoPacketReleaseControl to
   // initialize the VideoFrameReleaseControl so subsequent behaviour can be tested.
@@ -58,7 +58,6 @@ public class CompositionVideoPacketReleaseControlTest {
   public void setUp() {
     Context context = ApplicationProvider.getApplicationContext();
     releasedTextures = new HashSet<>();
-    outputPackets = new ArrayList<>();
     firstPacket = createPacket(/* presentationTimeUs= */ 0);
     fakeFrameTimingEvaluator = new FakeFrameTimingEvaluator();
     fakeClock = new FakeClock(/* initialTimeMs= */ 0);
@@ -66,11 +65,22 @@ public class CompositionVideoPacketReleaseControlTest {
         new VideoFrameReleaseControl(
             context, fakeFrameTimingEvaluator, /* allowedJoiningTimeMs= */ 0);
     videoFrameReleaseControl.setClock(fakeClock);
-    videoFrameReleaseControl.setOutputSurface(new Surface(new SurfaceTexture(1)));
     videoFrameReleaseControl.onStarted();
+    outputConsumer = new RecordingPacketConsumer(/* releaseIncomingFrames= */ false);
     compositionVideoPacketReleaseControl =
         new CompositionVideoPacketReleaseControl(
-            videoFrameReleaseControl, /* downstreamConsumer= */ outputPackets::add);
+            context,
+            videoFrameReleaseControl,
+            outputConsumer,
+            newDirectExecutorService(),
+            exception -> {
+              throw new IllegalStateException(exception);
+            });
+  }
+
+  @After
+  public void tearDown() {
+    compositionVideoPacketReleaseControl.release();
   }
 
   @Test
@@ -161,7 +171,8 @@ public class CompositionVideoPacketReleaseControlTest {
     // Update the release time of the first packet to match, to verify that scheduled release time
     // is correct.
     ImmutableList<GlTextureFrame> expectedFirstFrame =
-        updatePacketWithReleaseTime(firstPacket, outputPackets.get(0).get(0).releaseTimeNs);
+        updatePacketWithReleaseTime(
+            firstPacket, outputConsumer.getQueuedPackets().get(0).get(0).releaseTimeNs);
     assertOutputPackets(/* ignoreReleaseTime= */ false, expectedFirstFrame, expectedPacket);
     assertThat(releasedTextures).isEmpty();
   }
@@ -211,6 +222,7 @@ public class CompositionVideoPacketReleaseControlTest {
   @SafeVarargs
   private final void assertOutputPackets(
       boolean ignoreReleaseTime, List<GlTextureFrame>... expectedPackets) {
+    List<List<GlTextureFrame>> outputPackets = outputConsumer.getQueuedPackets();
     assertThat(outputPackets).hasSize(expectedPackets.length);
     for (int i = 0; i < expectedPackets.length; i++) {
       List<GlTextureFrame> receivedFrames = outputPackets.get(i);
@@ -224,6 +236,7 @@ public class CompositionVideoPacketReleaseControlTest {
           assertThat(receivedFrame.releaseTimeNs).isEqualTo(expectedFrame.releaseTimeNs);
         }
         assertThat(receivedFrame.glTextureInfo).isEqualTo(expectedFrame.glTextureInfo);
+        assertThat(receivedFrame.fenceSync).isEqualTo(expectedFrame.fenceSync);
       }
     }
   }

@@ -28,6 +28,7 @@ import static java.lang.annotation.ElementType.TYPE_USE;
 
 import android.content.Context;
 import android.media.AudioDeviceInfo;
+import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.media.PlaybackParams;
 import android.os.Handler;
@@ -548,7 +549,6 @@ public final class DefaultAudioSink implements AudioSink {
   private static final AtomicInteger pendingReleaseCount = new AtomicInteger();
 
   @Nullable private final Context context;
-  private final AudioOutputProvider audioOutputProvider;
   private final androidx.media3.common.audio.AudioProcessorChain audioProcessorChain;
   private final boolean enableFloatOutput;
   private final ChannelMappingAudioProcessor channelMappingAudioProcessor;
@@ -570,6 +570,7 @@ public final class DefaultAudioSink implements AudioSink {
   @Nullable private Configuration pendingConfiguration;
   private @MonotonicNonNull Configuration configuration;
   private @MonotonicNonNull AudioProcessingPipeline audioProcessingPipeline;
+  private AudioOutputProvider audioOutputProvider;
   private AudioOutputProvider.@MonotonicNonNull Listener audioOutputProviderListener;
   @Nullable private AudioOutput audioOutput;
 
@@ -768,6 +769,17 @@ public final class DefaultAudioSink implements AudioSink {
       outputConfig = audioOutputProvider.getOutputConfig(formatConfig);
     } catch (AudioOutputProvider.ConfigurationException e) {
       throw new ConfigurationException(e, inputFormat);
+    }
+
+    if (outputConfig.encoding == C.ENCODING_INVALID) {
+      throw new ConfigurationException(
+          "Invalid output encoding (isOffload=" + outputConfig.isOffload + ")",
+          formatConfig.format);
+    }
+    if (outputConfig.channelMask == AudioFormat.CHANNEL_INVALID) {
+      throw new ConfigurationException(
+          "Invalid output channel config (isOffload=" + outputConfig.isOffload + ")",
+          formatConfig.format);
     }
 
     offloadDisabledUntilNextConfiguration = false;
@@ -1049,7 +1061,7 @@ public final class DefaultAudioSink implements AudioSink {
           new InitializationException(
               AudioTrack.STATE_UNINITIALIZED,
               outputConfig.sampleRate,
-              outputConfig.channelConfig,
+              outputConfig.channelMask,
               outputConfig.encoding,
               outputConfig.bufferSize,
               configuration.inputFormat,
@@ -1403,6 +1415,19 @@ public final class DefaultAudioSink implements AudioSink {
         && configuration.outputConfig.useOffloadGapless) {
       audioOutput.setOffloadDelayPadding(delayInFrames, paddingInFrames);
     }
+  }
+
+  @Override
+  public void setAudioOutputProvider(AudioOutputProvider audioOutputProvider) {
+    if (audioOutputProvider.equals(this.audioOutputProvider)) {
+      return;
+    }
+    this.audioOutputProvider.release();
+    this.audioOutputProvider = audioOutputProvider;
+    if (audioOutputProviderListener != null) {
+      audioOutputProvider.addListener(audioOutputProviderListener);
+    }
+    reconfigureAndFlush();
   }
 
   @Override
@@ -1892,7 +1917,7 @@ public final class DefaultAudioSink implements AudioSink {
             new AudioTrackConfig(
                 outputConfig.encoding,
                 outputConfig.sampleRate,
-                outputConfig.channelConfig,
+                outputConfig.channelMask,
                 outputConfig.isTunneling,
                 outputConfig.isOffload,
                 outputConfig.bufferSize));
@@ -1978,7 +2003,7 @@ public final class DefaultAudioSink implements AudioSink {
       return new AudioTrackConfig(
           outputConfig.encoding,
           outputConfig.sampleRate,
-          outputConfig.channelConfig,
+          outputConfig.channelMask,
           outputConfig.isTunneling,
           outputConfig.isOffload,
           outputConfig.bufferSize);

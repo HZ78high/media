@@ -25,7 +25,6 @@ import android.media.AudioTrack;
 import android.media.PlaybackParams;
 import android.media.metrics.LogSessionId;
 import android.os.Handler;
-import android.os.Looper;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -45,7 +44,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 
 /** A default implementation of {@link AudioOutput} that wraps an {@link AudioTrack}. */
-/* package */ final class AudioTrackAudioOutput implements AudioOutput {
+public final class AudioTrackAudioOutput implements AudioOutput {
 
   /** Listener for potential capability change events. */
   /* package */ interface CapabilityChangeListener {
@@ -122,13 +121,13 @@ import java.util.concurrent.ScheduledExecutorService;
     this.audioTrack = audioTrack;
     this.config = config;
     this.capabilityChangeListener = capabilityChangeListener;
-    listeners = new ListenerSet<>(checkNotNull(Looper.myLooper()), clock);
+    listeners = new ListenerSet<>(Thread.currentThread());
     // TODO: b/450556896 - remove this line once threading in CompositionPlayer is fixed.
     listeners.setThrowsWhenUsingWrongThread(false);
 
     isOutputPcm = Util.isEncodingLinearPcm(config.encoding);
     if (isOutputPcm) {
-      int channelCount = Integer.bitCount(config.channelConfig);
+      int channelCount = Integer.bitCount(config.channelMask);
       pcmFrameSize = Util.getPcmFrameSize(config.encoding, channelCount);
     } else {
       pcmFrameSize = C.LENGTH_UNSET;
@@ -148,6 +147,11 @@ import java.util.concurrent.ScheduledExecutorService;
           new OnRoutingChangedListenerApi24(audioTrack, capabilityChangeListener);
     }
     offloadStreamEventCallbackV29 = isOffloadedPlayback() ? new StreamEventCallbackV29() : null;
+  }
+
+  /** Returns the {@link AudioTrack} instance used for audio output. */
+  public AudioTrack getAudioTrack() {
+    return audioTrack;
   }
 
   @Override
@@ -335,6 +339,7 @@ import java.util.concurrent.ScheduledExecutorService;
     audioTrackPositionTracker.expectRawPlaybackHeadReset();
   }
 
+  @UnstableApi
   @Override
   public void setPlayerId(PlayerId playerId) {
     if (SDK_INT < 31) {
@@ -548,6 +553,7 @@ import java.util.concurrent.ScheduledExecutorService;
    * Thrown when the audio track has provided a spurious timestamp, if {@link
    * AudioTrackAudioOutputProvider#failOnSpuriousAudioTimestamp} is set.
    */
+  @UnstableApi
   public static final class InvalidAudioTrackTimestampException extends RuntimeException {
 
     /**

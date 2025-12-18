@@ -221,9 +221,11 @@ import java.util.concurrent.atomic.AtomicReference;
   private void releaseInternal() throws VideoFrameProcessingException {
     if (currentInputFrame != null) {
       currentInputFrame.release();
+      currentInputFrame = null;
     }
     if (currentProcessedFrame != null) {
       currentProcessedFrame.release();
+      currentProcessedFrame = null;
     }
     shaderProgram.release();
   }
@@ -257,7 +259,7 @@ import java.util.concurrent.atomic.AtomicReference;
         return false;
       }
       Futures.addCallback(
-          // TODO: b/430250432 - Cancel pending tasks on release.
+          // TODO: b/449957627 - Cancel pending tasks on release.
           glThreadExecutorService.submit(
               () -> {
                 GlTextureInfo nextFrameTextureInfo = inputFrame.glTextureInfo;

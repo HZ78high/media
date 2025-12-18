@@ -32,6 +32,7 @@ def addMissingAarTypeToXml(xml) {
         "org.jetbrains.kotlin:kotlin-stdlib-jdk8",
         "org.jetbrains.kotlinx:kotlinx-coroutines-android",
         "org.jetbrains.kotlinx:kotlinx-coroutines-core",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-guava",
         "org.jetbrains.kotlinx:kotlinx-coroutines-test",
         "org.mockito:mockito-core",
         "org.robolectric:robolectric",
@@ -49,6 +50,7 @@ def addMissingAarTypeToXml(xml) {
         "androidx.exifinterface:exifinterface",
         "androidx.leanback:leanback",
         "androidx.media:media",
+        "androidx.mediarouter:mediarouter",
         "androidx.recyclerview:recyclerview",
         "androidx.test.ext:junit",
         "androidx.test.ext:truth",
@@ -59,6 +61,7 @@ def addMissingAarTypeToXml(xml) {
         "com.google.android.gms:play-services-cast-framework",
         "com.google.android.gms:play-services-cronet",
         "com.google.android.material:material",
+        "com.google.testparameterinjector:test-parameter-injector",
         "io.antmedia:rtmp-client",
         // go/keep-sorted end
     ]

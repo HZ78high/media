@@ -41,6 +41,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.media3.common.C;
+import com.google.common.collect.ImmutableList;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
@@ -56,9 +57,18 @@ public final class GlUtil {
 
   /** Thrown when an OpenGL error occurs. */
   public static final class GlException extends Exception {
+    /** The OpenGL error codes if present, empty if the error is not from the OpenGL engine. */
+    public final ImmutableList<Integer> errorCodes;
+
     /** Creates an instance with the specified error message. */
     public GlException(String message) {
+      this(message, /* errorCodes= */ ImmutableList.of());
+    }
+
+    /** Creates an instance with the specified error message and error codes. */
+    public GlException(String message, List<Integer> errorCodes) {
       super(message);
+      this.errorCodes = ImmutableList.copyOf(errorCodes);
     }
   }
 
@@ -101,6 +111,9 @@ public final class GlUtil {
         EGL14.EGL_STENCIL_SIZE, /* stencilSize= */ 0,
         EGL14.EGL_NONE
       };
+
+  /** Marker value for when no fence sync is set. */
+  @ExperimentalApi public static final long GL_FENCE_SYNC_UNSET = -1;
 
   // https://registry.khronos.org/OpenGL-Refpages/es3.0/html/glFenceSync.xhtml
   private static final long GL_FENCE_SYNC_FAILED = 0;
@@ -276,7 +289,7 @@ public final class GlUtil {
             /* unusedMinor */ new int[1],
             /* minorOffset= */ 0),
         "Error in eglInitialize.");
-    checkGlError();
+    checkEglException("Error in getDefaultEglDisplay");
     return eglDisplay;
   }
 
@@ -328,7 +341,7 @@ public final class GlUtil {
               + " version "
               + openGlVersion);
     }
-    checkGlError();
+    checkEglException("Error in createEglContext");
     return eglContext;
   }
 
@@ -496,15 +509,21 @@ public final class GlUtil {
 
   /** Releases the GL sync object if set, suppressing any error. */
   public static void deleteSyncObjectQuietly(long syncObject) {
+    if (syncObject == GL_FENCE_SYNC_UNSET) {
+      return;
+    }
     GLES30.glDeleteSync(syncObject);
   }
 
   /**
    * Ensures that following commands on the current OpenGL context will not be executed until the
-   * sync point has been reached. If {@code syncObject} equals {@code 0}, this does not block the
-   * CPU, and only affects the current OpenGL context. Otherwise, this will block the CPU.
+   * sync point has been reached. If {@code syncObject} equals {@code #GL_FENCE_SYNC_UNSET}, this is
+   * a no-op. This method does not block the CPU.
    */
   public static void awaitSyncObject(long syncObject) throws GlException {
+    if (syncObject == GL_FENCE_SYNC_UNSET) {
+      return;
+    }
     if (syncObject == GL_FENCE_SYNC_FAILED) {
       // Fallback to using glFinish for synchronization when fence creation failed.
       GLES20.glFinish();
@@ -527,6 +546,7 @@ public final class GlUtil {
     StringBuilder errorMessageBuilder = new StringBuilder();
     boolean foundError = false;
     int error;
+    ImmutableList.Builder<Integer> errorCodes = new ImmutableList.Builder<>();
     while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
       if (foundError) {
         errorMessageBuilder.append('\n');
@@ -537,9 +557,10 @@ public final class GlUtil {
       }
       errorMessageBuilder.append("glError: ").append(errorString);
       foundError = true;
+      errorCodes.add(error);
     }
     if (foundError) {
-      throw new GlException(errorMessageBuilder.toString());
+      throw new GlException(errorMessageBuilder.toString(), errorCodes.build());
     }
   }
 
@@ -1108,7 +1129,9 @@ public final class GlUtil {
   private static void checkEglException(String errorMessage) throws GlException {
     int error = EGL14.eglGetError();
     if (error != EGL14.EGL_SUCCESS) {
-      throw new GlException(errorMessage + ", error code: 0x" + Integer.toHexString(error));
+      throw new GlException(
+          errorMessage + ", error code: 0x" + Integer.toHexString(error),
+          /* errorCodes= */ ImmutableList.of(error));
     }
   }
 }

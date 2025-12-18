@@ -39,7 +39,6 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.ConditionVariable;
 import androidx.media3.session.legacy.MediaMetadataCompat;
-import androidx.media3.test.session.R;
 import androidx.media3.test.session.common.CommonConstants;
 import androidx.media3.test.session.common.HandlerThreadTestRule;
 import androidx.media3.test.session.common.MainLooperTestRule;
@@ -797,6 +796,48 @@ public class MediaControllerListenerWithMediaSessionCompatTest {
                 button1.copyWithSlots(ImmutableIntArray.of(CommandButton.SLOT_OVERFLOW)),
                 button2.copyWithSlots(ImmutableIntArray.of(CommandButton.SLOT_OVERFLOW))))
         .inOrder();
+  }
+
+  @Test
+  public void getMediaButtonPreferences_containsExtrasFromCustomAction() throws Exception {
+    ConditionVariable onMediaButtonPreferencesChangedCalled = new ConditionVariable();
+    MediaController controller =
+        controllerTestRule.createController(
+            session.getSessionToken(),
+            new MediaController.Listener() {
+              @Override
+              public void onMediaButtonPreferencesChanged(
+                  MediaController controller, List<CommandButton> mediaButtonPreferences) {
+                onMediaButtonPreferencesChangedCalled.open();
+              }
+            });
+    Bundle extras = new Bundle();
+    extras.putString("key", "value");
+    PlaybackStateCompat.CustomAction customAction =
+        new PlaybackStateCompat.CustomAction.Builder(
+                "command", "button1", /* icon= */ R.drawable.media3_notification_small_icon)
+            .setExtras(extras)
+            .build();
+    PlaybackStateCompat playbackState =
+        new PlaybackStateCompat.Builder().addCustomAction(customAction).build();
+
+    session.setPlaybackState(playbackState);
+    assertThat(onMediaButtonPreferencesChangedCalled.block(TIMEOUT_MS)).isTrue();
+    ImmutableList<CommandButton> mediaButtonPreferences =
+        threadTestRule.getHandler().postAndSync(controller::getMediaButtonPreferences);
+    SessionCommands availableSessionCommands =
+        threadTestRule.getHandler().postAndSync(controller::getAvailableSessionCommands);
+    SessionCommand customCommand =
+        availableSessionCommands.commands.stream()
+            .filter(command -> command.commandCode == SessionCommand.COMMAND_CODE_CUSTOM)
+            .findFirst()
+            .get();
+
+    assertThat(mediaButtonPreferences).hasSize(1);
+    assertThat(mediaButtonPreferences.get(0).sessionCommand.customExtras.getString("key"))
+        .isEqualTo("value");
+    assertThat(mediaButtonPreferences.get(0).extras.getString("key")).isEqualTo("value");
+    assertThat(customCommand.customExtras.getString("key")).isEqualTo("value");
   }
 
   @Test
