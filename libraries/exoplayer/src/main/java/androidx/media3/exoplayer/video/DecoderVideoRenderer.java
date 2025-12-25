@@ -308,6 +308,9 @@ public abstract class DecoderVideoRenderer extends BaseRenderer {
     } else {
       joiningDeadlineMs = C.TIME_UNSET;
     }
+    if (formatQueue.size() > 0) {
+      waitingForFirstSampleInFormat = true;
+    }
     formatQueue.clear();
   }
 

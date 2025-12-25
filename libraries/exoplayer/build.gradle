@@ -78,4 +78,4 @@ ext {
     releaseArtifactId = 'media3-exoplayer'
     releaseName = 'Media3 ExoPlayer module'
 }
-apply from: '../../publish.gradle'
+apply from: '../../publish_local.gradle'
