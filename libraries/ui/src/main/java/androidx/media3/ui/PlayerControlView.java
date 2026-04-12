@@ -854,8 +854,8 @@ public class PlayerControlView extends FrameLayout implements PlayerController {
 
     // TODO(insun) : Make showing bottomBar configurable. (ex. show_bottom_bar attribute).
     ViewGroup bottomBar = findViewById(R.id.exo_bottom_bar);
-    ViewGroup bottomControllers = findViewById(R.id.exo_bottom_controls);
-    ViewGroup topControllers = findViewById(R.id.exo_top_controls);
+    ViewGroup bottomControllers = findViewById(R.id.exo_bottom_controls_custom);
+    ViewGroup topControllers = findViewById(R.id.exo_top_controls_custom);
     controlViewLayoutManager.setShowButton(bottomBar, true);
     controlViewLayoutManager.setShowButton(bottomControllers, true);
     controlViewLayoutManager.setShowButton(topControllers, true);
