@@ -111,8 +111,8 @@ import java.util.List;
 
     // Relating to Bottom Bar View
     bottomBar = playerControlView.findViewById(R.id.exo_bottom_bar);
-    topControllers = playerControlView.findViewById(R.id.exo_top_controls);
-    bottomControllers = playerControlView.findViewById(R.id.exo_bottom_controls);
+    topControllers = playerControlView.findViewById(R.id.exo_top_controls_custom);
+    bottomControllers = playerControlView.findViewById(R.id.exo_bottom_controls_custom);
 
     // Relating to Bottom Bar Left View
     timeView = playerControlView.findViewById(R.id.exo_time);
@@ -875,8 +875,8 @@ import java.util.List;
     int id = button.getId();
     return (id == R.id.exo_bottom_bar
         || id == R.id.exo_media_route_button_placeholder
-        || id == R.id.exo_top_controls
-        || id == R.id.exo_bottom_controls
+        || id == R.id.exo_top_controls_custom
+        || id == R.id.exo_bottom_controls_custom
         || id == R.id.exo_prev
         || id == R.id.exo_next
         || id == R.id.exo_rew
