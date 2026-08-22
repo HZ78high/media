@@ -13,7 +13,7 @@
 // limitations under the License.
 plugins {
   id("media3.android-library")
-  id("media3.publish")
+  id("com.hyz.media3.publish")
 }
 
 android {
