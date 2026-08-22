@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package androidx.media3.extractor.mkv;
+package com.hyz.media3.extractor.mkv;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.annotation.ElementType.TYPE_USE;
@@ -21,6 +21,7 @@ import static java.lang.annotation.ElementType.TYPE_USE;
 import androidx.annotation.IntDef;
 import androidx.media3.common.C;
 import androidx.media3.common.ParserException;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.extractor.ExtractorInput;
 import java.io.EOFException;
 import java.io.IOException;
@@ -33,6 +34,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
 /** Default implementation of {@link EbmlReader}. */
+@UnstableApi
 /* package */ final class DefaultEbmlReader implements EbmlReader {
 
   @Documented
