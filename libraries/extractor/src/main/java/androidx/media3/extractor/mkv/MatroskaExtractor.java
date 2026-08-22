@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package androidx.media3.extractor.mkv;
+package com.hyz.media3.extractor.mkv;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -43,7 +43,6 @@ import androidx.media3.common.util.ParsableByteArray;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.util.Util;
 import androidx.media3.common.util.WavUtil;
-import androidx.media3.container.DolbyVisionConfig;
 import androidx.media3.container.NalUnitUtil;
 import androidx.media3.extractor.AacUtil;
 import androidx.media3.extractor.Av1Config;
@@ -68,6 +67,8 @@ import androidx.media3.extractor.metadata.ThumbnailMetadata;
 import androidx.media3.extractor.text.SubtitleParser;
 import androidx.media3.extractor.text.SubtitleTranscodingExtractorOutput;
 import com.google.common.collect.ImmutableList;
+import com.hyz.media3.extractor.Converter;
+import java.io.EOFException;
 import java.io.IOException;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
@@ -109,7 +110,9 @@ public class MatroskaExtractor implements Extractor {
   @Target(TYPE_USE)
   @IntDef(
       flag = true,
-      value = {FLAG_DISABLE_SEEK_FOR_CUES, FLAG_EMIT_RAW_SUBTITLE_DATA})
+      value = {FLAG_DISABLE_SEEK_FOR_CUES, FLAG_EMIT_RAW_SUBTITLE_DATA,
+              FLAG_DISABLE_CONVERT_DOLBY_PROFILE_7, FLAG_CONVERT_TO_PROFILE_8,FLAG_DISABLE_DOLBY_VISION, 
+              FLAG_SET_DOLBY_ZERO_LEVEL_5})
   public @interface Flags {}
 
   /**
@@ -127,6 +130,17 @@ public class MatroskaExtractor implements Extractor {
    * transcoded to {@link MimeTypes#APPLICATION_MEDIA3_CUES} during extraction.
    */
   public static final int FLAG_EMIT_RAW_SUBTITLE_DATA = 1 << 1; // 2
+
+  /**
+   * Flag to disable convert dolby profile 7.
+   */
+  public static final int FLAG_DISABLE_CONVERT_DOLBY_PROFILE_7 = 1<<2; //3
+  
+  public static final int FLAG_CONVERT_TO_PROFILE_8 = 1<<3; //4
+
+  public static final int FLAG_DISABLE_DOLBY_VISION = 1<<4; //5
+
+  public static final int FLAG_SET_DOLBY_ZERO_LEVEL_5 = 1<<5; //6
 
   /**
    * @deprecated Use {@link #newFactory(SubtitleParser.Factory)} instead.
@@ -454,6 +468,9 @@ public class MatroskaExtractor implements Extractor {
   private final LongSparseArray<ChapterEntry> chapters;
   private final boolean seekForCuesEnabled;
   private final boolean parseSubtitlesDuringExtraction;
+  private final int convertType;
+  private final boolean keepDolbyVision;
+  private final boolean setDolbyZeroLevel5;
   private final SubtitleParser.Factory subtitleParserFactory;
 
   // Temporary arrays.
@@ -468,6 +485,7 @@ public class MatroskaExtractor implements Extractor {
   private final ParsableByteArray encryptionSubsampleData;
   private final ParsableByteArray supplementalData;
   private @MonotonicNonNull ByteBuffer encryptionSubsampleDataBuffer;
+  private @MonotonicNonNull ParsableByteArray dolbyVisionRpuBuffer;
 
   private long segmentContentSize;
   private long segmentContentPosition = C.INDEX_UNSET;
@@ -533,6 +551,7 @@ public class MatroskaExtractor implements Extractor {
   private boolean samplePartitionCountRead;
   private int samplePartitionCount;
   private byte sampleSignalByte;
+  private final byte[] peekBuffer;
   private boolean sampleInitializationVectorRead;
 
   // Extractor outputs.
@@ -586,6 +605,14 @@ public class MatroskaExtractor implements Extractor {
     this.perTrackCues = new SparseArray<>();
     seekForCuesEnabled = (flags & FLAG_DISABLE_SEEK_FOR_CUES) == 0;
     parseSubtitlesDuringExtraction = (flags & FLAG_EMIT_RAW_SUBTITLE_DATA) == 0;
+    convertType =
+            ((flags & FLAG_DISABLE_CONVERT_DOLBY_PROFILE_7) != 0)
+                    ? 0
+                    : ((flags & FLAG_CONVERT_TO_PROFILE_8) == 0)
+                    ? 1
+                    : 2;
+    keepDolbyVision = (flags & FLAG_DISABLE_DOLBY_VISION) == 0;
+    setDolbyZeroLevel5 = (flags & FLAG_SET_DOLBY_ZERO_LEVEL_5) != 0;
     varintReader = new VarintReader();
     chapters = new LongSparseArray<>();
     tracks = new SparseArray<>();
@@ -601,6 +628,7 @@ public class MatroskaExtractor implements Extractor {
     supplementalData = new ParsableByteArray();
     blockSampleSizes = new int[1];
     pendingEndTracks = true;
+	  peekBuffer = new byte[1];
   }
 
   @Override
@@ -1706,6 +1734,11 @@ public class MatroskaExtractor implements Extractor {
         || track.blockAddIdType == BLOCK_ADD_ID_TYPE_DVCC) {
       track.dolbyVisionConfigBytes = new byte[contentSize];
       input.readFully(track.dolbyVisionConfigBytes, 0, contentSize);
+      if (track.dolbyVisionConfigBytes != null) {
+        track.convertType = convertType;
+        track.discardDolbyVision = !keepDolbyVision;
+        track.dolbyVisionConfig = DolbyVisionConfig.parse(new ParsableByteArray(track.dolbyVisionConfigBytes));
+      }
     } else {
       // Unhandled BlockAddIDExtraData.
       input.skipFully(contentSize);
@@ -1961,7 +1994,7 @@ public class MatroskaExtractor implements Extractor {
         sampleStrippedBytes.reset(track.sampleStrippedBytes, track.sampleStrippedBytes.length);
       }
 
-      if (track.samplesHaveSupplementalData(isBlockGroup)) {
+      if (track.samplesHaveSupplementalData(isBlockGroup) && track.dolbyVisionConfigBytes == null) {
         blockFlags |= C.BUFFER_FLAG_HAS_SUPPLEMENTAL_DATA;
         supplementalData.reset(/* limit= */ 0);
         // If there is supplemental data, the structure of the sample data is:
@@ -1994,24 +2027,96 @@ public class MatroskaExtractor implements Extractor {
       // NAL units are length delimited, but the decoder requires start code delimited units.
       // Loop until we've written the sample to the track output, replacing length delimiters with
       // start codes as we encounter them.
-      while (sampleBytesRead < size) {
-        if (sampleCurrentNalBytesRemaining == 0) {
-          // Read the NAL length so that we know where we find the next one.
-          writeToTarget(
-              input, nalLengthData, nalUnitLengthFieldLengthDiff, nalUnitLengthFieldLength);
-          sampleBytesRead += nalUnitLengthFieldLength;
-          nalLength.setPosition(0);
-          sampleCurrentNalBytesRemaining = nalLength.readUnsignedIntToInt();
-          // Write a start code for the current NAL unit.
-          nalStartCode.setPosition(0);
-          output.sampleData(nalStartCode, 4);
-          sampleBytesWritten += 4;
-        } else {
-          // Write the payload of the NAL unit.
-          int bytesWritten = writeToOutput(input, output, sampleCurrentNalBytesRemaining);
-          sampleBytesRead += bytesWritten;
-          sampleBytesWritten += bytesWritten;
-          sampleCurrentNalBytesRemaining -= bytesWritten;
+      if (track.dolbyVisionConfig != null && (convertType != 0 && track.dolbyVisionConfig.profile == 7 && (convertType == 2 || !track.isMel) ||
+              !keepDolbyVision || setDolbyZeroLevel5)
+              && CODEC_ID_H265.equals(track.codecId)) {
+        while (sampleBytesRead < size) {
+          if(sampleCurrentNalBytesRemaining == 0) {
+            writeToTarget(
+                    input, nalLengthData, nalUnitLengthFieldLengthDiff, nalUnitLengthFieldLength);
+            sampleBytesRead += nalUnitLengthFieldLength;
+            nalLength.setPosition(0);
+            sampleCurrentNalBytesRemaining = nalLength.readUnsignedIntToInt();
+            int unit_type = (peekUnsignedByte(input)>>1) & 0x3F;
+            switch (unit_type) {
+              case 63: {
+                int bytesSkip = skipData(input, sampleCurrentNalBytesRemaining);
+                sampleBytesRead += bytesSkip;
+                sampleCurrentNalBytesRemaining -= bytesSkip;
+                continue;
+              }
+              case 62: {
+                if (!keepDolbyVision) {
+                  int bytesSkip = skipData(input, sampleCurrentNalBytesRemaining);
+                  sampleBytesRead += bytesSkip;
+                  sampleCurrentNalBytesRemaining -= bytesSkip;
+                  continue;
+                }
+                nalStartCode.setPosition(0);
+                output.sampleData(nalStartCode, 4);
+                sampleBytesWritten += 4;
+                int sizeData = sampleCurrentNalBytesRemaining;
+                int newBuf = sizeData * 3 + 20;
+                if (dolbyVisionRpuBuffer == null) {
+                  dolbyVisionRpuBuffer = new ParsableByteArray(new byte[newBuf]);
+                } else {
+                  if (dolbyVisionRpuBuffer.limit() < sizeData * 3) {
+                    dolbyVisionRpuBuffer.reset(new byte[newBuf]);
+                  }
+                }
+                int sizeBuf = dolbyVisionRpuBuffer.limit();
+                writeToTarget(input, dolbyVisionRpuBuffer.getData(), 0, sizeData);
+                sampleBytesRead += sizeData;
+                sampleCurrentNalBytesRemaining -= sizeData;
+                int length = Converter.convertDolbyProfile(dolbyVisionRpuBuffer.getData(), sizeData,sizeBuf, convertType, setDolbyZeroLevel5);
+                if (length == 0) {
+                    length = sizeData;
+                    track.isMel = true;
+                }
+                dolbyVisionRpuBuffer.setPosition(0);
+                if (length > 0) {
+                  output.sampleData(dolbyVisionRpuBuffer, length);
+                  sampleBytesWritten += length;
+                } else {
+                  Log.e(TAG,"error when converting DolbyProfile");
+                  output.sampleData(dolbyVisionRpuBuffer, sizeData);
+                  sampleBytesWritten += sizeData;
+                }
+                continue;
+              }
+              default:
+                nalStartCode.setPosition(0);
+                output.sampleData(nalStartCode, 4);
+                sampleBytesWritten += 4;
+                break;
+            }
+          }else {
+              int bytesWritten = writeToOutput(input, output, sampleCurrentNalBytesRemaining);
+              sampleBytesRead += bytesWritten;
+              sampleBytesWritten += bytesWritten;
+              sampleCurrentNalBytesRemaining -= bytesWritten;
+          }
+        }
+      }else {
+        while (sampleBytesRead < size) {
+          if (sampleCurrentNalBytesRemaining == 0) {
+            // Read the NAL length so that we know where we find the next one.
+            writeToTarget(
+                    input, nalLengthData, nalUnitLengthFieldLengthDiff, nalUnitLengthFieldLength);
+            sampleBytesRead += nalUnitLengthFieldLength;
+            nalLength.setPosition(0);
+            sampleCurrentNalBytesRemaining = nalLength.readUnsignedIntToInt();
+            // Write a start code for the current NAL unit.
+            nalStartCode.setPosition(0);
+            output.sampleData(nalStartCode, 4);
+            sampleBytesWritten += 4;
+          } else {
+            // Write the payload of the NAL unit.
+            int bytesWritten = writeToOutput(input, output, sampleCurrentNalBytesRemaining);
+            sampleBytesRead += bytesWritten;
+            sampleBytesWritten += bytesWritten;
+            sampleCurrentNalBytesRemaining -= bytesWritten;
+          }
         }
       }
     } else {
@@ -2157,6 +2262,32 @@ public class MatroskaExtractor implements Extractor {
     input.readFully(target, offset + pendingStrippedBytes, length - pendingStrippedBytes);
     if (pendingStrippedBytes > 0) {
       sampleStrippedBytes.readBytes(target, offset, pendingStrippedBytes);
+    }
+  }
+
+  private int skipData(ExtractorInput input,int length)
+          throws IOException {
+      int pendingStrippedBytes = min(length, sampleStrippedBytes.bytesLeft());
+      input.skipFully(length - pendingStrippedBytes);
+      if (pendingStrippedBytes > 0) {
+        sampleStrippedBytes.skipBytes(pendingStrippedBytes);
+      }
+      return length;
+  }
+  private int peekUnsignedByte(ExtractorInput input)
+          throws IOException {
+    int pendingStrippedBytes = sampleStrippedBytes.bytesLeft();
+    if (pendingStrippedBytes > 0) {
+      return sampleStrippedBytes.peekUnsignedByte();
+    } else {
+      try {
+        input.resetPeekPosition();
+        input.peekFully(peekBuffer, 0, 1);
+        input.resetPeekPosition();
+        return peekBuffer[0] & 0xFF;
+      } catch (EOFException e) {
+        throw new IOException("Unexpected end of input when peeking byte", e);
+      }
     }
   }
 
@@ -2431,6 +2562,10 @@ public class MatroskaExtractor implements Extractor {
     public float maxMasteringLuminance = Format.NO_VALUE;
     public float minMasteringLuminance = Format.NO_VALUE;
     public byte @MonotonicNonNull [] dolbyVisionConfigBytes;
+    @Nullable public DolbyVisionConfig dolbyVisionConfig;
+    public int convertType;
+    public boolean discardDolbyVision;
+    public boolean isMel;
 
     // Audio elements. Initially set to their default values.
     public int channelCount = 1;
@@ -2699,12 +2834,18 @@ public class MatroskaExtractor implements Extractor {
               "Unrecognized codec identifier.", /* cause= */ null);
       }
 
-      if (dolbyVisionConfigBytes != null) {
-        @Nullable
-        DolbyVisionConfig dolbyVisionConfig =
-            DolbyVisionConfig.parse(new ParsableByteArray(this.dolbyVisionConfigBytes));
-        if (dolbyVisionConfig != null) {
-          codecs = dolbyVisionConfig.codecs;
+      if (dolbyVisionConfig != null) {
+        String dvCodecs = dolbyVisionConfig.codecs;
+        boolean isDvhe = dvCodecs.startsWith("dvhe");
+        boolean shouldUseConverted = convertType == 2 && dolbyVisionConfig.profile == 7;
+
+        if (isDvhe) {
+          if (!discardDolbyVision) {
+            codecs = shouldUseConverted  ? dolbyVisionConfig.convertedProfile() : dvCodecs;
+            mimeType = MimeTypes.VIDEO_DOLBY_VISION;
+          }
+        } else {
+          codecs = dvCodecs;
           mimeType = MimeTypes.VIDEO_DOLBY_VISION;
         }
       }

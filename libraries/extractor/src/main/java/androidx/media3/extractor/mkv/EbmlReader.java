@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package androidx.media3.extractor.mkv;
+package com.hyz.media3.extractor.mkv;
 
 import androidx.media3.common.ParserException;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.extractor.ExtractorInput;
 import java.io.IOException;
 
@@ -26,6 +27,7 @@ import java.io.IOException;
  * originally designed for the Matroska container format. More information about EBML and Matroska
  * is available <a href="http://www.matroska.org/technical/specs/index.html">here</a>.
  */
+@UnstableApi
 /* package */ interface EbmlReader {
 
   /**

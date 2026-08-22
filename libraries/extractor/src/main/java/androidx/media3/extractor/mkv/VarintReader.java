@@ -13,14 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package androidx.media3.extractor.mkv;
+package com.hyz.media3.extractor.mkv;
 
 import androidx.media3.common.C;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.extractor.ExtractorInput;
 import java.io.EOFException;
 import java.io.IOException;
 
 /** Reads EBML variable-length integers (varints) from an {@link ExtractorInput}. */
+@UnstableApi
 /* package */ final class VarintReader {
 
   private static final int STATE_BEGIN_READING = 0;
